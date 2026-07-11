@@ -1,0 +1,12 @@
+{
+  "name": "omni-agent",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.30.3",
+  "scripts": {
+    "dev": "pnpm --filter @omni-agent/extension dev",
+    "build": "pnpm --filter @omni-agent/extension build",
+    "check": "pnpm --filter @omni-agent/extension check",
+    "typecheck": "pnpm --filter @omni-agent/extension check && pnpm --filter './packages/*' typecheck"
+  }
+}
