@@ -65,12 +65,15 @@ export const useExtensionStore = defineStore('extension', {
     memoryError: '',
     memoryDiagnostic: null as MemoryInjectionDiagnostic | null,
     skills: [] as SkillDefinition[],
+    skillQuery: '',
+    matchedSkills: [] as SkillDefinition[],
     skillDraftName: '',
     skillDraftDescription: '',
     skillDraftPrompt: '',
     skillDraftTriggers: '',
     skillLoading: false,
     skillError: '',
+    agentPollTimer: null as ReturnType<typeof setInterval> | null,
     tools: [] as ToolDescriptor[],
     selectedToolName: '',
     toolArgumentJson: '{\n  "query": ""\n}',
@@ -286,9 +289,34 @@ export const useExtensionStore = defineStore('extension', {
         this.skills = await browser.runtime.sendMessage<ExtensionMessage<'omni:list-skills'>, SkillDefinition[]>({
           type: 'omni:list-skills',
         });
+        if (this.skillQuery.trim()) await this.matchSkills();
+        else this.matchedSkills = [];
         this.skillError = '';
       } catch (error) {
         this.skillError = error instanceof Error ? error.message : '读取 Skill 失败';
+      } finally {
+        this.skillLoading = false;
+      }
+    },
+    async matchSkills() {
+      const query = this.skillQuery.trim();
+      if (!query) {
+        this.matchedSkills = [];
+        return;
+      }
+      this.skillLoading = true;
+      try {
+        const matches = await browser.runtime.sendMessage<
+          ExtensionMessage<'omni:match-skills'>,
+          Array<{ skill: SkillDefinition; score: number }>
+        >({
+          type: 'omni:match-skills',
+          payload: { query, limit: 8 },
+        });
+        this.matchedSkills = matches.map((item) => item.skill);
+        this.skillError = '';
+      } catch (error) {
+        this.skillError = error instanceof Error ? error.message : '匹配 Skill 失败';
       } finally {
         this.skillLoading = false;
       }
@@ -455,20 +483,34 @@ export const useExtensionStore = defineStore('extension', {
             providerId: this.adapter.provider ?? undefined,
           },
         });
+        this.selectedAgentTaskId = created.id;
+        this.agentGoalDraft = '';
+        this.startAgentPolling();
         const finished = await browser.runtime.sendMessage<ExtensionMessage<'omni:run-agent-task'>, AgentTask>({
           type: 'omni:run-agent-task',
           payload: { taskId: created.id },
         });
         this.selectedAgentTaskId = finished.id;
-        this.agentGoalDraft = '';
         await this.refreshAgentTasks();
         await this.refreshMemories();
         await this.refreshTools();
       } catch (error) {
         this.agentError = error instanceof Error ? error.message : '执行 Agent 任务失败';
       } finally {
+        this.stopAgentPolling();
         this.agentLoading = false;
       }
+    },
+    startAgentPolling() {
+      this.stopAgentPolling();
+      this.agentPollTimer = setInterval(() => {
+        void this.refreshAgentTasks();
+      }, 800);
+    },
+    stopAgentPolling() {
+      if (!this.agentPollTimer) return;
+      clearInterval(this.agentPollTimer);
+      this.agentPollTimer = null;
     },
     async pauseSelectedAgentTask() {
       if (!this.selectedAgentTaskId) return;
@@ -489,6 +531,7 @@ export const useExtensionStore = defineStore('extension', {
       if (!this.selectedAgentTaskId) return;
       this.agentLoading = true;
       try {
+        this.startAgentPolling();
         await browser.runtime.sendMessage<ExtensionMessage<'omni:resume-agent-task'>, AgentTask>({
           type: 'omni:resume-agent-task',
           payload: { taskId: this.selectedAgentTaskId },
@@ -497,6 +540,7 @@ export const useExtensionStore = defineStore('extension', {
       } catch (error) {
         this.agentError = error instanceof Error ? error.message : '恢复任务失败';
       } finally {
+        this.stopAgentPolling();
         this.agentLoading = false;
       }
     },
@@ -642,18 +686,34 @@ export const useExtensionStore = defineStore('extension', {
       try {
         const result = await browser.runtime.sendMessage<
           ExtensionMessage<'omni:import-data'>,
-          { ok: boolean; importedProjects: number; importedMemories: number; importedSkills: number }
+          {
+            ok: boolean;
+            importedProjects: number;
+            importedMemories: number;
+            importedSkills: number;
+            importedConversations?: number;
+            importedMessages?: number;
+            importedAgentTasks?: number;
+          }
         >({
           type: 'omni:import-data',
           payload: { payload: this.backupJson },
         });
-        this.backupMessage = `导入完成：项目 ${result.importedProjects}，记忆 ${result.importedMemories}，Skill ${result.importedSkills}`;
+        this.backupMessage = [
+          `导入完成：项目 ${result.importedProjects}`,
+          `记忆 ${result.importedMemories}`,
+          `Skill ${result.importedSkills}`,
+          `会话 ${result.importedConversations ?? 0}`,
+          `消息 ${result.importedMessages ?? 0}`,
+          `任务 ${result.importedAgentTasks ?? 0}`,
+        ].join('，');
         await Promise.all([
           this.refreshProjects(),
           this.refreshMemories(),
           this.refreshSkills(),
           this.refreshSettings(),
           this.refreshSavedConversations(),
+          this.refreshAgentTasks(),
         ]);
       } catch (error) {
         this.backupError = error instanceof Error ? error.message : '导入失败';

@@ -589,31 +589,35 @@ async function formatProjectContext(projectId?: string | null): Promise<string> 
 }
 
 async function exportWorkspaceData() {
-  const [memories, skillsList, projects, settings, activeProjectId, conversations] = await Promise.all([
+  const [memories, skillsList, projects, settings, activeProjectId, conversations, agentTasks] = await Promise.all([
     storage.listMemories(),
     skills.list(),
     storage.listProjects(),
     getRuntimeSettings(),
     storage.getActiveProjectId(),
     storage.listConversations(),
+    storage.listAgentTasks(),
   ]);
+  const conversationPayload = await Promise.all(conversations.map(async (item) => ({
+    id: item.id,
+    providerId: item.providerId,
+    externalId: item.externalId,
+    title: item.title,
+    projectId: item.projectId,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+    messages: await storage.listMessages(item.id),
+  })));
   return {
-    version: 1,
+    version: 2,
     exportedAt: Date.now(),
     settings,
     activeProjectId,
     memories,
     skills: skillsList,
     projects,
-    conversations: conversations.map((item) => ({
-      id: item.id,
-      providerId: item.providerId,
-      externalId: item.externalId,
-      title: item.title,
-      projectId: item.projectId,
-      createdAt: item.createdAt,
-      updatedAt: item.updatedAt,
-    })),
+    agentTasks,
+    conversations: conversationPayload,
   };
 }
 
@@ -624,6 +628,8 @@ async function importWorkspaceData(raw: string) {
     memories?: Array<Record<string, unknown>>;
     skills?: Array<Record<string, unknown>>;
     projects?: Array<Record<string, unknown>>;
+    conversations?: Array<Record<string, unknown>>;
+    agentTasks?: Array<Record<string, unknown>>;
   };
   try {
     parsed = JSON.parse(raw) as typeof parsed;
@@ -705,11 +711,65 @@ async function importWorkspaceData(raw: string) {
     importedSkills += 1;
   }
 
+  let importedConversations = 0;
+  let importedMessages = 0;
+  for (const item of parsed.conversations ?? []) {
+    if (typeof item.providerId !== 'string' || typeof item.externalId !== 'string') continue;
+    if (item.providerId !== 'deepseek' && item.providerId !== 'kimi') continue;
+    const conversation = await storage.getOrCreateConversation({
+      providerId: item.providerId,
+      externalId: item.externalId,
+      title: typeof item.title === 'string' ? item.title : null,
+      projectId: typeof item.projectId === 'string' ? item.projectId : null,
+    });
+    importedConversations += 1;
+    const messages = Array.isArray(item.messages) ? item.messages : [];
+    for (const message of messages) {
+      if (!message || typeof message !== 'object') continue;
+      const row = message as Record<string, unknown>;
+      if (typeof row.content !== 'string' || !row.content.trim()) continue;
+      const role = row.role === 'assistant' || row.role === 'system' || row.role === 'tool' ? row.role : 'user';
+      await storage.upsertMessage({
+        conversationId: conversation.id,
+        externalId: typeof row.externalId === 'string' ? row.externalId : null,
+        role,
+        content: row.content,
+        attachments: Array.isArray(row.attachments) ? row.attachments as string[] : [],
+      });
+      importedMessages += 1;
+    }
+  }
+
+  let importedAgentTasks = 0;
+  for (const item of parsed.agentTasks ?? []) {
+    if (typeof item.id !== 'string' || typeof item.goal !== 'string' || !item.goal.trim()) continue;
+    await storage.saveAgentTask({
+      id: item.id,
+      goal: item.goal,
+      status: (item.status as AgentTaskRecord['status']) || 'stopped',
+      steps: Array.isArray(item.steps) ? item.steps : [],
+      result: typeof item.result === 'string' ? item.result : null,
+      error: typeof item.error === 'string' ? item.error : null,
+      providerId: item.providerId === 'deepseek' || item.providerId === 'kimi' ? item.providerId : null,
+      projectId: typeof item.projectId === 'string' ? item.projectId : null,
+      createdAt: typeof item.createdAt === 'number' ? item.createdAt : Date.now(),
+      updatedAt: typeof item.updatedAt === 'number' ? item.updatedAt : Date.now(),
+    });
+    importedAgentTasks += 1;
+  }
+  if (importedAgentTasks > 0) {
+    agentReady = null;
+    await ensureAgentReady();
+  }
+
   return {
     ok: true,
     importedProjects,
     importedMemories,
     importedSkills,
+    importedConversations,
+    importedMessages,
+    importedAgentTasks,
   };
 }
 

@@ -271,6 +271,24 @@ onMounted(() => {
         注册 Skill
       </el-button>
       <el-alert v-if="extension.skillError" class="action-error" :title="extension.skillError" type="error" :closable="false" />
+      <div class="filter-row">
+        <el-input
+          v-model="extension.skillQuery"
+          class="filter-select"
+          clearable
+          placeholder="匹配 Skill，例如 调研代码审查"
+          @keyup.enter="extension.matchSkills"
+          @clear="extension.matchedSkills = []"
+        />
+        <el-button :loading="extension.skillLoading" @click="extension.matchSkills">匹配</el-button>
+      </div>
+      <ul v-if="extension.matchedSkills.length" class="skill-list">
+        <li v-for="skill in extension.matchedSkills" :key="`match-${skill.id}`">
+          <span class="message-role">matched</span>
+          <strong>{{ skill.manifest.name }}</strong>
+          <p>{{ skill.manifest.description || skill.prompt }}</p>
+        </li>
+      </ul>
       <ul v-if="extension.skills.length" class="skill-list">
         <li v-for="skill in extension.skills" :key="skill.id">
           <div class="skill-item-header">
