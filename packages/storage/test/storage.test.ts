@@ -103,4 +103,15 @@ test('stores providers, conversations, messages, and settings locally', async (t
   await storage.deleteConversation(conversation.id);
   assert.equal((await storage.listConversations('deepseek')).length, 0);
   assert.equal((await storage.listMessages(conversation.id)).length, 0);
+
+  const project = await storage.saveProject({
+    id: 'project-1',
+    name: 'OmniAgent',
+    description: '个人 AI 系统',
+    context: '跨平台记忆与工具',
+    status: 'active',
+  });
+  await storage.setActiveProjectId(project.id);
+  assert.equal(await storage.getActiveProjectId(), 'project-1');
+  assert.equal((await storage.listProjects())[0]?.name, 'OmniAgent');
 });

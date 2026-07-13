@@ -39,6 +39,7 @@ export interface AgentContext {
   memoryContext: string;
   skillContext: string;
   toolContext: string;
+  projectContext: string;
   providerId?: string | null;
   projectId?: string | null;
 }

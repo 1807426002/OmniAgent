@@ -46,28 +46,33 @@ export const memorySaveTool: ToolDefinition = {
 
 export const browserSnapshotTool: ToolDefinition = {
   name: 'browser.snapshot',
-  description: 'Capture the active browser tab title, URL, and visible text snapshot.',
+  description: 'Capture the active browser tab title, URL, text, and interactive element refs.',
   source: 'browser',
   permissions: ['browser.read'],
   parameters: [
     { name: 'includeText', type: 'boolean', description: 'Include page text', required: false },
     { name: 'maxLength', type: 'number', description: 'Max text length', required: false },
+    { name: 'includeElements', type: 'boolean', description: 'Include interactive element refs', required: false },
+    { name: 'maxElements', type: 'number', description: 'Max interactive elements', required: false },
   ],
   async execute(input, context) {
     if (!context.services.browser) throw new Error('Browser service is unavailable');
     return context.services.browser.snapshot({
       includeText: input.includeText !== false,
       maxLength: typeof input.maxLength === 'number' ? input.maxLength : 4_000,
+      includeElements: input.includeElements !== false,
+      maxElements: typeof input.maxElements === 'number' ? input.maxElements : 40,
     });
   },
 };
 
 export const browserClickTool: ToolDefinition = {
   name: 'browser.click',
-  description: 'Click an element on the active page by CSS selector or visible text.',
+  description: 'Click an element on the active page by ref, CSS selector, or visible text.',
   source: 'browser',
   permissions: ['browser.act'],
   parameters: [
+    { name: 'ref', type: 'string', description: 'Element ref from browser.snapshot', required: false },
     { name: 'selector', type: 'string', description: 'CSS selector', required: false },
     { name: 'text', type: 'string', description: 'Visible text', required: false },
     { name: 'exact', type: 'boolean', description: 'Exact text match', required: false },
@@ -75,6 +80,7 @@ export const browserClickTool: ToolDefinition = {
   async execute(input, context) {
     if (!context.services.browser?.click) throw new Error('Browser click is unavailable');
     return context.services.browser.click({
+      ref: typeof input.ref === 'string' ? input.ref : undefined,
       selector: typeof input.selector === 'string' ? input.selector : undefined,
       text: typeof input.text === 'string' ? input.text : undefined,
       exact: input.exact === true,
@@ -88,6 +94,7 @@ export const browserTypeTool: ToolDefinition = {
   source: 'browser',
   permissions: ['browser.act'],
   parameters: [
+    { name: 'ref', type: 'string', description: 'Element ref from browser.snapshot', required: false },
     { name: 'selector', type: 'string', description: 'CSS selector', required: false },
     { name: 'text', type: 'string', description: 'Visible label/text for target', required: false },
     { name: 'value', type: 'string', description: 'Text to type', required: true },
@@ -98,6 +105,7 @@ export const browserTypeTool: ToolDefinition = {
     if (!context.services.browser?.type) throw new Error('Browser type is unavailable');
     const value = String(input.value ?? '');
     return context.services.browser.type({
+      ref: typeof input.ref === 'string' ? input.ref : undefined,
       selector: typeof input.selector === 'string' ? input.selector : undefined,
       text: typeof input.text === 'string' ? input.text : undefined,
       value,

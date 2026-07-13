@@ -89,6 +89,7 @@ test('executes browser.snapshot via browser service', async () => {
     title: 'DeepSeek',
     text: 'page body',
     selectedText: 'selected',
+    elements: [],
     at: 123,
   };
   const runtime = createToolRuntime({
@@ -150,6 +151,7 @@ function createBrowserService() {
       title: 'Example',
       text: 'hello',
       selectedText: '',
+      elements: [{ ref: 'e1', tag: 'button', role: 'button', name: 'Go', selector: '#go' }],
       at: Date.now(),
     }),
     click: async () => ({ ok: true as const, action: 'click', detail: 'ok', url: 'https://example.com', title: 'Example' }),

@@ -44,13 +44,17 @@ export interface ExtensionMessageMap {
   'omni:browser-snapshot': {
     includeText?: boolean;
     maxLength?: number;
+    includeElements?: boolean;
+    maxElements?: number;
   };
   'omni:browser-click': {
+    ref?: string;
     selector?: string;
     text?: string;
     exact?: boolean;
   };
   'omni:browser-type': {
+    ref?: string;
     selector?: string;
     text?: string;
     value: string;
@@ -76,6 +80,17 @@ export interface ExtensionMessageMap {
   'omni:pause-agent-task': { taskId: string };
   'omni:resume-agent-task': { taskId: string };
   'omni:delete-agent-task': { taskId: string };
+  'omni:list-projects': Record<string, never>;
+  'omni:save-project': {
+    id?: string;
+    name: string;
+    description?: string;
+    context?: string;
+    status?: 'active' | 'paused' | 'archived';
+  };
+  'omni:delete-project': { id: string };
+  'omni:set-active-project': { id: string | null };
+  'omni:get-active-project': Record<string, never>;
   'omni:augment-prompt': { provider: SupportedProvider; prompt: string };
   'omni:insert-prompt': { message: string };
   'omni:send-message': { message: string };

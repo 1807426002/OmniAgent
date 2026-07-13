@@ -1,5 +1,6 @@
 export type {
   BrowserActionResult,
+  BrowserElementRef,
   BrowserSnapshot,
   BrowserToolService,
   ToolCall,

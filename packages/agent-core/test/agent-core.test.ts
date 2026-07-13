@@ -10,6 +10,7 @@ test('plans browser and memory actions from natural language goals', () => {
       memoryContext: '',
       skillContext: '',
       toolContext: '',
+      projectContext: '',
     },
     [],
   );
@@ -27,6 +28,7 @@ test('plans github search goals into navigate + snapshot', () => {
       memoryContext: '',
       skillContext: '',
       toolContext: '',
+      projectContext: '',
     },
     [],
   );

@@ -24,11 +24,23 @@ export interface ToolServices {
   browser?: BrowserToolService;
 }
 
+export interface BrowserElementRef {
+  ref: string;
+  tag: string;
+  role: string;
+  name: string;
+  selector: string;
+  href?: string;
+  inputType?: string;
+  placeholder?: string;
+}
+
 export interface BrowserSnapshot {
   url: string;
   title: string;
   text: string;
   selectedText: string;
+  elements?: BrowserElementRef[];
   at: number;
 }
 
@@ -41,11 +53,17 @@ export interface BrowserActionResult {
 }
 
 export interface BrowserToolService {
-  snapshot(options?: { includeText?: boolean; maxLength?: number }): Promise<BrowserSnapshot>;
-  click(options: { selector?: string; text?: string; exact?: boolean }): Promise<BrowserActionResult>;
+  snapshot(options?: {
+    includeText?: boolean;
+    maxLength?: number;
+    includeElements?: boolean;
+    maxElements?: number;
+  }): Promise<BrowserSnapshot>;
+  click(options: { selector?: string; text?: string; exact?: boolean; ref?: string }): Promise<BrowserActionResult>;
   type(options: {
     selector?: string;
     text?: string;
+    ref?: string;
     value: string;
     clear?: boolean;
     submit?: boolean;

@@ -50,6 +50,7 @@ onMounted(() => {
   extension.refreshTools();
   extension.refreshMcpServers();
   extension.refreshAgentTasks();
+  extension.refreshProjects();
 });
 </script>
 
@@ -291,6 +292,59 @@ onMounted(() => {
         <p class="response-text">{{ formatToolResult(extension.lastToolResult) }}</p>
       </div>
       <p v-else class="empty-text">尚未执行工具</p>
+    </section>
+
+    <section class="capability-card">
+      <div class="section-heading">
+        <h2>项目上下文</h2>
+        <el-button text :loading="extension.projectLoading" @click="extension.refreshProjects">刷新</el-button>
+      </div>
+      <el-select
+        :model-value="extension.activeProjectId"
+        class="conversation-select"
+        clearable
+        placeholder="未选择活动项目"
+        @change="(value: string) => extension.setActiveProject(value || null)"
+      >
+        <el-option
+          v-for="project in extension.projects"
+          :key="project.id"
+          :label="project.name"
+          :value="project.id"
+        />
+      </el-select>
+      <el-input v-model="extension.projectDraftName" class="skill-input" placeholder="项目名称，例如 OmniAgent" />
+      <el-input v-model="extension.projectDraftDescription" class="skill-input" placeholder="简短描述" />
+      <el-input
+        v-model="extension.projectDraftContext"
+        class="skill-input"
+        type="textarea"
+        :rows="3"
+        placeholder="项目上下文，会在记忆注入与 Agent 任务中使用"
+      />
+      <el-button
+        class="primary-action"
+        type="primary"
+        :loading="extension.projectLoading"
+        :disabled="!extension.projectDraftName.trim()"
+        @click="extension.saveProject"
+      >
+        保存并设为活动项目
+      </el-button>
+      <el-alert v-if="extension.projectError" class="action-error" :title="extension.projectError" type="error" :closable="false" />
+      <ul v-if="extension.projects.length" class="skill-list">
+        <li v-for="project in extension.projects" :key="project.id">
+          <div class="skill-item-header">
+            <div>
+              <span class="message-role">{{ project.status }}{{ project.id === extension.activeProjectId ? ' · active' : '' }}</span>
+              <strong>{{ project.name }}</strong>
+            </div>
+            <el-button text type="danger" size="small" @click="extension.deleteProject(project.id)">删除</el-button>
+          </div>
+          <p>{{ project.description || project.context || '无描述' }}</p>
+        </li>
+      </ul>
+      <p v-else class="empty-text">暂无项目</p>
     </section>
 
     <section class="capability-card">

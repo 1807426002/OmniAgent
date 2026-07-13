@@ -1,8 +1,20 @@
+export interface BrowserElementRef {
+  ref: string;
+  tag: string;
+  role: string;
+  name: string;
+  selector: string;
+  href?: string;
+  inputType?: string;
+  placeholder?: string;
+}
+
 export interface BrowserSnapshot {
   url: string;
   title: string;
   text: string;
   selectedText: string;
+  elements: BrowserElementRef[];
   at: number;
 }
 
@@ -17,17 +29,21 @@ export interface BrowserActionResult {
 export interface SnapshotOptions {
   includeText?: boolean;
   maxLength?: number;
+  includeElements?: boolean;
+  maxElements?: number;
 }
 
 export interface ClickOptions {
   selector?: string;
   text?: string;
   exact?: boolean;
+  ref?: string;
 }
 
 export interface TypeOptions {
   selector?: string;
   text?: string;
+  ref?: string;
   value: string;
   clear?: boolean;
   submit?: boolean;

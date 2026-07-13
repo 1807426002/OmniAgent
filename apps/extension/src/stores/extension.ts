@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import type { AdapterStatus, ConversationTurn, ExtensionMessage, ExtensionMessageMap } from '@omni-agent/shared';
-import type { ConversationRecord, MessageRecord, MemoryRecord } from '@omni-agent/storage';
+import type { ConversationRecord, MessageRecord, MemoryRecord, ProjectRecord } from '@omni-agent/storage';
 import type { SkillDefinition } from '@omni-agent/skills';
 import type { ToolDescriptor, ToolResult } from '@omni-agent/tools';
 import type { AgentTask } from '@omni-agent/agent-core';
@@ -69,6 +69,13 @@ export const useExtensionStore = defineStore('extension', {
     agentGoalDraft: '',
     agentLoading: false,
     agentError: '',
+    projects: [] as ProjectRecord[],
+    activeProjectId: '',
+    projectDraftName: '',
+    projectDraftDescription: '',
+    projectDraftContext: '',
+    projectLoading: false,
+    projectError: '',
     listening: false,
   }),
   actions: {
@@ -453,6 +460,81 @@ export const useExtensionStore = defineStore('extension', {
         this.agentError = error instanceof Error ? error.message : '删除任务失败';
       } finally {
         this.agentLoading = false;
+      }
+    },
+    async refreshProjects() {
+      this.projectLoading = true;
+      try {
+        this.projects = await browser.runtime.sendMessage<ExtensionMessage<'omni:list-projects'>, ProjectRecord[]>({
+          type: 'omni:list-projects',
+        });
+        const active = await browser.runtime.sendMessage<ExtensionMessage<'omni:get-active-project'>, ProjectRecord | null>({
+          type: 'omni:get-active-project',
+        });
+        this.activeProjectId = active?.id ?? '';
+        this.projectError = '';
+      } catch (error) {
+        this.projectError = error instanceof Error ? error.message : '读取项目失败';
+      } finally {
+        this.projectLoading = false;
+      }
+    },
+    async saveProject() {
+      const name = this.projectDraftName.trim();
+      if (!name) return;
+      this.projectLoading = true;
+      try {
+        const project = await browser.runtime.sendMessage<ExtensionMessage<'omni:save-project'>, ProjectRecord>({
+          type: 'omni:save-project',
+          payload: {
+            name,
+            description: this.projectDraftDescription.trim(),
+            context: this.projectDraftContext.trim(),
+            status: 'active',
+          },
+        });
+        this.projectDraftName = '';
+        this.projectDraftDescription = '';
+        this.projectDraftContext = '';
+        await browser.runtime.sendMessage<ExtensionMessage<'omni:set-active-project'>, { ok: boolean }>({
+          type: 'omni:set-active-project',
+          payload: { id: project.id },
+        });
+        await this.refreshProjects();
+      } catch (error) {
+        this.projectError = error instanceof Error ? error.message : '保存项目失败';
+      } finally {
+        this.projectLoading = false;
+      }
+    },
+    async setActiveProject(id: string | null) {
+      this.projectLoading = true;
+      try {
+        await browser.runtime.sendMessage<ExtensionMessage<'omni:set-active-project'>, { ok: boolean }>({
+          type: 'omni:set-active-project',
+          payload: { id },
+        });
+        this.activeProjectId = id ?? '';
+        await this.refreshProjects();
+      } catch (error) {
+        this.projectError = error instanceof Error ? error.message : '切换项目失败';
+      } finally {
+        this.projectLoading = false;
+      }
+    },
+    async deleteProject(id: string) {
+      this.projectLoading = true;
+      try {
+        await browser.runtime.sendMessage<ExtensionMessage<'omni:delete-project'>, { ok: boolean }>({
+          type: 'omni:delete-project',
+          payload: { id },
+        });
+        if (this.activeProjectId === id) this.activeProjectId = '';
+        await this.refreshProjects();
+      } catch (error) {
+        this.projectError = error instanceof Error ? error.message : '删除项目失败';
+      } finally {
+        this.projectLoading = false;
       }
     },
   },

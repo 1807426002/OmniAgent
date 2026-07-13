@@ -1,6 +1,7 @@
 export type {
   BrowserActionResult,
   BrowserAgentService,
+  BrowserElementRef,
   BrowserSnapshot,
   ClickOptions,
   NavigateOptions,

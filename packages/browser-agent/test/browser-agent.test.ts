@@ -20,12 +20,15 @@ test('page controller can snapshot, click, type and scroll with a minimal DOM', 
   const snapshot = controller.snapshot({ maxLength: 100 });
   assert.equal(snapshot.title, 'Demo');
   assert.match(snapshot.text, /Hello/);
+  assert.ok(snapshot.elements.length >= 2);
+  assert.ok(snapshot.elements.some((item) => item.ref === 'e1'));
 
-  const click = controller.click({ selector: '#go' });
+  const click = controller.click({ ref: snapshot.elements.find((item) => item.tag === 'button')?.ref });
   assert.equal(click.ok, true);
   assert.equal(document.querySelector('#go')?.getAttribute('data-clicked'), '1');
 
-  const typed = controller.type({ selector: '#q', value: 'OmniAgent', clear: true });
+  const inputRef = snapshot.elements.find((item) => item.tag === 'input')?.ref;
+  const typed = controller.type({ ref: inputRef, value: 'OmniAgent', clear: true });
   assert.equal(typed.ok, true);
   assert.equal((document.querySelector('#q') as { value: string }).value, 'OmniAgent');
 
@@ -71,6 +74,14 @@ function createMiniDom(): { document: Document; window: Window } {
       this.attributes.set(name, value);
       if (name === 'id') this.id = value;
       if (name === 'class') this.className = value;
+    }
+
+    removeAttribute(name: string) {
+      this.attributes.delete(name);
+    }
+
+    getBoundingClientRect() {
+      return { width: 20, height: 20, top: 0, left: 0, right: 20, bottom: 20 };
     }
 
     appendChild(child: MiniElement) {
@@ -167,6 +178,7 @@ function createMiniDom(): { document: Document; window: Window } {
   const window = {
     location: { href: 'https://example.com/' },
     getSelection: () => ({ toString: () => '' }),
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1' }),
     scrollBy: ({ top = 0 }: { left?: number; top?: number }) => {
       scrollY += top;
     },
@@ -210,10 +222,15 @@ function createMiniDom(): { document: Document; window: Window } {
   function matchesSelector(node: MiniElement, selector: string): boolean {
     if (selector.startsWith('#')) return node.id === selector.slice(1);
     if (selector.includes(',')) return selector.split(',').some((part) => matchesSelector(node, part.trim()));
-    if (selector.startsWith('[') && selector.endsWith(']')) {
-      // minimal attribute support unused in this test
-      return false;
+    const attrMatch = selector.match(/^([a-z0-9*-]+)?\[([^=\]]+)(?:="([^"]*)")?\]$/i);
+    if (attrMatch) {
+      const [, tag, attr, value] = attrMatch;
+      if (tag && tag !== '*' && node.tagName.toLowerCase() !== tag.toLowerCase()) return false;
+      const actual = node.getAttribute(attr);
+      if (value === undefined) return actual != null;
+      return actual === value;
     }
+    if (selector.includes('[') && selector.includes(']')) return false;
     return node.tagName.toLowerCase() === selector.toLowerCase();
   }
 }

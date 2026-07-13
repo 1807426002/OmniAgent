@@ -106,6 +106,18 @@ export interface AgentTaskRecord {
   updatedAt: number;
 }
 
+export type ProjectStatus = 'active' | 'paused' | 'archived';
+
+export interface ProjectRecord {
+  id: string;
+  name: string;
+  description: string;
+  context: string;
+  status: ProjectStatus;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export class OmniAgentDatabase extends Dexie {
   providers!: EntityTable<ProviderRecord, 'id'>;
   conversations!: EntityTable<ConversationRecord, 'id'>;
@@ -114,6 +126,7 @@ export class OmniAgentDatabase extends Dexie {
   memories!: EntityTable<MemoryRecord, 'id'>;
   skills!: EntityTable<SkillRecord, 'id'>;
   agentTasks!: EntityTable<AgentTaskRecord, 'id'>;
+  projects!: EntityTable<ProjectRecord, 'id'>;
 
   constructor(name = 'omni-agent') {
     super(name);
@@ -146,6 +159,16 @@ export class OmniAgentDatabase extends Dexie {
       memories: '&id, type, scope, providerId, projectId, *keywords, updatedAt',
       skills: '&id, name, enabled, source, updatedAt',
       agentTasks: '&id, status, updatedAt',
+    });
+    this.version(5).stores({
+      providers: '&id, adapter, updatedAt',
+      conversations: '&id, providerId, externalId, [providerId+externalId], updatedAt',
+      messages: '&id, conversationId, externalId, role, [conversationId+externalId], [conversationId+createdAt], updatedAt',
+      settings: '&key, updatedAt',
+      memories: '&id, type, scope, providerId, projectId, *keywords, updatedAt',
+      skills: '&id, name, enabled, source, updatedAt',
+      agentTasks: '&id, status, projectId, updatedAt',
+      projects: '&id, name, status, updatedAt',
     });
   }
 }
@@ -335,6 +358,42 @@ export class OmniAgentStorage {
 
   async deleteAgentTask(id: string): Promise<void> {
     await this.db.agentTasks.delete(id);
+  }
+
+  async listProjects(): Promise<ProjectRecord[]> {
+    return (await this.db.projects.toArray()).sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  async saveProject(input: Omit<ProjectRecord, 'createdAt' | 'updatedAt'> & { createdAt?: number; updatedAt?: number }): Promise<ProjectRecord> {
+    const now = Date.now();
+    const existing = await this.db.projects.get(input.id);
+    const project: ProjectRecord = {
+      ...input,
+      createdAt: existing?.createdAt ?? input.createdAt ?? now,
+      updatedAt: now,
+    };
+    await this.db.projects.put(project);
+    return project;
+  }
+
+  async getProject(id: string): Promise<ProjectRecord | undefined> {
+    return this.db.projects.get(id);
+  }
+
+  async deleteProject(id: string): Promise<void> {
+    await this.db.projects.delete(id);
+  }
+
+  async getActiveProjectId(): Promise<string | null> {
+    return (await this.getSetting<string>('active-project-id')) ?? null;
+  }
+
+  async setActiveProjectId(id: string | null): Promise<void> {
+    if (!id) {
+      await this.db.settings.delete('active-project-id');
+      return;
+    }
+    await this.setSetting('active-project-id', id);
   }
 }
 

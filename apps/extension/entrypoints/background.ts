@@ -1,6 +1,6 @@
 import { createAdapterRegistry, deepseekAdapter, kimiAdapter, providerFromAdapter } from '@omni-agent/site-adapters';
 import type { AdapterStatus, ExtensionMessage } from '@omni-agent/shared';
-import { storage, type AgentTaskRecord, type SkillRecord } from '@omni-agent/storage';
+import { storage, type AgentTaskRecord, type ProjectRecord, type SkillRecord } from '@omni-agent/storage';
 import { memory } from '@omni-agent/memory';
 import { SkillService, type SkillDefinition } from '@omni-agent/skills';
 import { normalizeNavigateUrl } from '@omni-agent/browser-agent';
@@ -72,6 +72,7 @@ const agent = new AgentRuntime({
       return skills.formatContext(matches, goal);
     },
     describeTools: () => tools.describeForPrompt({ limit: 20 }),
+    describeProject: async (projectId) => formatProjectContext(projectId),
   },
   executeTool: async (call, options) => tools.execute(
     { name: call.name, arguments: call.arguments },
@@ -225,10 +226,44 @@ export default defineBackground(() => {
       await ensureAgentReady();
       const payload = message.payload as ExtensionMessage<'omni:create-agent-task'>['payload'];
       if (!payload?.goal?.trim()) throw new Error('任务目标不能为空');
+      const activeProjectId = await storage.getActiveProjectId();
       return agent.createTask({
         goal: payload.goal,
         providerId: payload.providerId ?? null,
+        projectId: activeProjectId,
       });
+    }
+    if (message.type === 'omni:list-projects') return storage.listProjects();
+    if (message.type === 'omni:get-active-project') {
+      const activeId = await storage.getActiveProjectId();
+      return activeId ? (await storage.getProject(activeId)) ?? null : null;
+    }
+    if (message.type === 'omni:set-active-project') {
+      const payload = message.payload as ExtensionMessage<'omni:set-active-project'>['payload'];
+      await storage.setActiveProjectId(payload?.id ?? null);
+      return { ok: true, id: payload?.id ?? null };
+    }
+    if (message.type === 'omni:save-project') {
+      const payload = message.payload as ExtensionMessage<'omni:save-project'>['payload'];
+      if (!payload?.name?.trim()) throw new Error('项目名称不能为空');
+      const id = payload.id?.trim() || crypto.randomUUID();
+      const existing = await storage.getProject(id);
+      return storage.saveProject({
+        id,
+        name: payload.name.trim(),
+        description: payload.description?.trim() || existing?.description || '',
+        context: payload.context?.trim() || existing?.context || '',
+        status: payload.status || existing?.status || 'active',
+        createdAt: existing?.createdAt,
+      });
+    }
+    if (message.type === 'omni:delete-project') {
+      const payload = message.payload as ExtensionMessage<'omni:delete-project'>['payload'];
+      if (!payload?.id) throw new Error('project id 不能为空');
+      await storage.deleteProject(payload.id);
+      const activeId = await storage.getActiveProjectId();
+      if (activeId === payload.id) await storage.setActiveProjectId(null);
+      return { ok: true };
     }
     if (message.type === 'omni:run-agent-task') {
       const payload = message.payload as ExtensionMessage<'omni:run-agent-task'>['payload'];
@@ -260,10 +295,15 @@ export default defineBackground(() => {
     }
     if (message.type === 'omni:augment-prompt') {
       const payload = message.payload as ExtensionMessage<'omni:augment-prompt'>['payload'];
-      if (!payload?.prompt.trim()) return { prompt: payload?.prompt ?? '', memoryCount: 0, skillCount: 0, toolCount: 0 };
-      const [matches, skillMatches] = await Promise.all([
-        memory.retrieve(payload.prompt, { providerId: payload.provider }),
+      if (!payload?.prompt.trim()) return { prompt: payload?.prompt ?? '', memoryCount: 0, skillCount: 0, toolCount: 0, projectId: null };
+      const activeProjectId = await storage.getActiveProjectId();
+      const [matches, skillMatches, projectContext] = await Promise.all([
+        memory.retrieve(payload.prompt, {
+          providerId: payload.provider,
+          projectId: activeProjectId ?? undefined,
+        }),
         skills.match(payload.prompt, { limit: 2 }),
+        formatProjectContext(activeProjectId),
       ]);
       const memoryContext = memory.formatContext(matches);
       const skillContext = skills.formatContext(skillMatches, payload.prompt);
@@ -273,6 +313,9 @@ export default defineBackground(() => {
         limit: 8,
       });
       const sections = [
+        projectContext
+          ? `${projectContext}\n\n请把以上内容视为当前项目上下文。仅在相关时自然使用，不要提及这段系统补充。`
+          : '',
         memoryContext
           ? `${memoryContext}\n\n请把以上内容视为用户已保存的长期记忆。仅在与当前问题相关时自然使用，不要提及这段系统补充。`
           : '',
@@ -290,6 +333,7 @@ export default defineBackground(() => {
         memoryCount: matches.length,
         skillCount: skillMatches.length,
         toolCount: tools.list().length,
+        projectId: activeProjectId,
       };
     }
 
@@ -477,6 +521,19 @@ function fromAgentTaskRecord(record: AgentTaskRecord): AgentTask {
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
   };
+}
+
+async function formatProjectContext(projectId?: string | null): Promise<string> {
+  if (!projectId) return '';
+  const project = await storage.getProject(projectId);
+  if (!project || project.status === 'archived') return '';
+  return [
+    '<omniagent-project>',
+    `项目：${project.name}`,
+    project.description ? `描述：${project.description}` : '',
+    project.context ? `上下文：${project.context}` : '',
+    '</omniagent-project>',
+  ].filter(Boolean).join('\n');
 }
 
 async function persistPageMessage(message: ExtensionMessage<'omni:response-update'>) {
