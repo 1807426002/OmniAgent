@@ -54,6 +54,7 @@ export interface SiteAdapter {
   match(url: string): boolean;
   insertPrompt(message: string): Promise<void>;
   sendMessage(message: string): Promise<void>;
+  hideInternalProtocolMessages(): void;
   getLatestTurn(): ConversationTurn;
   observeMessages(callback: (message: ObservedMessage) => void): () => void;
   observeResponse(callback: (response: ModelResponse) => void): () => void;

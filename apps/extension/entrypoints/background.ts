@@ -18,7 +18,7 @@ import {
 } from '@omni-agent/tools';
 import { McpProvider } from '@omni-agent/mcp';
 import { AgentRuntime, type AgentTask } from '@omni-agent/agent-core';
-import { buildContinuationPrompt, parseAgentDecision, serializeToolResult } from '@omni-agent/agent-protocol';
+import { buildContinuationPrompt, isInternalProtocolMessage, parseAgentDecision, serializeToolResult } from '@omni-agent/agent-protocol';
 
 const adapters = createAdapterRegistry([deepseekAdapter, kimiAdapter]);
 const memoryDiagnosticKey = 'memory-injection-diagnostic';
@@ -163,8 +163,22 @@ export default defineBackground(() => {
     }
 
     if (message.type === 'omni:response-update') {
-      await persistPageMessage(message as ExtensionMessage<'omni:response-update'>);
-      await handleModelToolCall(message as ExtensionMessage<'omni:response-update'>);
+      // Page observers can fire repeatedly while an answer is streaming.  Never
+      // let a storage/model-processing failure reject the runtime message: Chrome
+      // forwards that rejection to the page and it breaks the prompt bridge used
+      // for memory injection on Kimi.
+      void persistPageMessage(message as ExtensionMessage<'omni:response-update'>)
+        .then(() => handleModelToolCall(message as ExtensionMessage<'omni:response-update'>))
+        .catch((error: unknown) => {
+          const detail = error instanceof Error ? error.message : String(error);
+          console.warn('[OmniAgent] response update handling failed', error);
+          void storage.setSetting(memoryDiagnosticKey, {
+            stage: 'response-update-error',
+            detail,
+            count: 0,
+            at: Date.now(),
+          }).catch(() => undefined);
+        });
       return undefined;
     }
     if (message.type === 'omni:capture-user-memory') {
@@ -588,7 +602,17 @@ export default defineBackground(() => {
     if (!tab?.id) throw new Error('无法获取当前浏览器标签页');
 
     const adapter = adapters.find(tab.url ?? '');
-    if (message.type === 'omni:adapter-status') return statusFor(tab.url, adapter);
+    if (message.type === 'omni:adapter-status') {
+      if (!adapter) return statusFor(tab.url, adapter);
+      try {
+        const status = await browser.tabs.sendMessage(tab.id, message) as AdapterStatus | undefined;
+        if (status?.provider) return status;
+      } catch {
+        // Fall through to an actionable error instead of reporting a URL-only
+        // match as a connected page.
+      }
+      throw new Error(`${providerFromAdapter(adapter) === 'kimi' ? 'Kimi' : 'DeepSeek'} 页面适配器未就绪，请刷新当前网页后重试`);
+    }
     if (
       message.type === 'omni:browser-snapshot' ||
       message.type === 'omni:browser-click' ||
@@ -1000,6 +1024,9 @@ async function handleModelToolCall(message: ExtensionMessage<'omni:response-upda
 async function persistPageMessage(message: ExtensionMessage<'omni:response-update'>) {
   const payload = message.payload;
   if (!payload) return;
+  // Tool-loop control messages use the provider UI as transport only. They do
+  // not belong in user-visible history or local session archives.
+  if (isInternalProtocolMessage(payload.text)) return;
   const activeProjectId = await storage.getActiveProjectId();
   const temporaryExternalId = `temp:${payload.provider}:${payload.pageSessionId ?? 'unknown'}`;
   const conversation = await storage.getOrCreateConversation({

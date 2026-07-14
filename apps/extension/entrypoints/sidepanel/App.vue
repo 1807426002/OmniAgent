@@ -6,23 +6,10 @@ import { useExtensionStore } from '../../src/stores/extension';
 const extension = useExtensionStore();
 const status = computed(() => (extension.ready ? '基础工程已就绪' : '正在初始化'));
 const provider = computed(() => extension.adapter.provider?.toUpperCase() ?? '未识别的平台');
-const detectedHost = computed(() => {
-  if (!extension.adapter.url) return '无法获取当前标签页';
-  try {
-    return new URL(extension.adapter.url).host;
-  } catch {
-    return extension.adapter.url;
-  }
-});
-const adapterDescription = computed(() => {
-  if (extension.refreshError) return `识别失败：${extension.refreshError}`;
-  if (extension.adapter.url.startsWith('chrome://') || extension.adapter.url.startsWith('edge://')) {
-    return 'Chrome/Edge 内部页面不能注入脚本，请切换到 DeepSeek 或 Kimi 网页后再识别';
-  }
-  return extension.adapter.provider
-    ? '已连接当前网页的 Site Adapter'
-    : '请打开 DeepSeek 或 Kimi 网页以启用适配器';
-});
+const supportedProviders = [
+  { id: 'deepseek', name: 'DeepSeek', host: 'chat.deepseek.com' },
+  { id: 'kimi', name: 'Kimi', host: 'kimi.com' },
+] as const;
 const selectedToolDescription = computed(
   () => extension.tools.find((tool) => tool.name === extension.selectedToolName)?.description ?? '',
 );
@@ -52,7 +39,7 @@ const selectedAgentTask = computed(
 const activeProject = computed(
   () => extension.projects.find((project) => project.id === extension.activeProjectId) ?? null,
 );
-type PanelId = 'overview' | 'chat' | 'conversations' | 'memory' | 'skills' | 'tools' | 'tasks' | 'projects' | 'settings';
+type PanelId = 'overview' | 'conversations' | 'memory' | 'skills' | 'tools' | 'tasks' | 'projects' | 'settings';
 
 const activePanel = ref<PanelId>('overview');
 type MemoryView = 'home' | 'layer' | 'review' | 'manage';
@@ -97,7 +84,6 @@ function candidateReason(candidate: { status: string; reason?: string | null }):
   return candidate.reason || '请确认这是否是你希望长期保留的信息。';
 }
 const panelTitles: Record<Exclude<PanelId, 'overview'>, string> = {
-  chat: '当前 AI',
   conversations: '本地会话',
   memory: '长期记忆',
   skills: 'Skills',
@@ -137,6 +123,7 @@ watch(() => extension.memoryNewItemId, async (id) => {
 
 onMounted(() => {
   extension.startResponseListener();
+  extension.startAdapterListener();
   extension.startDiagnosticPolling();
   extension.refreshAdapter();
   extension.refreshSavedConversations();
@@ -180,81 +167,31 @@ onUnmounted(() => {
           <span>{{ item.label }}</span>
         </button>
       </div>
-      <button type="button" class="quick-card" @click="openPanel('chat')">
-        <span class="quick-card-label">当前 AI</span>
+      <section class="active-ai-card" :class="{ connected: extension.adapter.provider }" aria-label="当前激活 AI">
+        <span class="quick-card-label">当前激活 AI</span>
         <strong>{{ provider }}</strong>
-        <span>{{ extension.adapter.provider ? '查看输入与问答详情' : '打开 AI 网页后可连接' }}</span>
-      </button>
+        <span>{{ extension.adapter.provider ? '已随当前浏览器页签自动切换' : '切换到已支持的网站后自动激活' }}</span>
+      </section>
+      <section class="provider-section" aria-label="已支持的平台">
+        <span class="quick-card-label">已支持的平台</span>
+        <div class="provider-grid">
+          <div
+            v-for="item in supportedProviders"
+            :key="item.id"
+            class="provider-card"
+            :class="{ connected: extension.adapter.provider === item.id }"
+          >
+            <strong>{{ item.name }}</strong>
+            <span>{{ extension.adapter.provider === item.id ? '已自动连接' : item.host }}</span>
+          </div>
+        </div>
+      </section>
       <button type="button" class="settings-link" @click="openPanel('settings')">设置与备份</button>
     </section>
     <header v-else class="detail-header">
       <el-button text class="back-button" @click="activePanel = 'overview'">← 概览</el-button>
       <h1>{{ panelTitles[activePanel] }}</h1>
     </header>
-
-    <section v-if="activePanel === 'chat'" class="capability-card detail-card">
-      <el-alert
-        :title="provider"
-        :description="adapterDescription"
-        :type="extension.refreshError ? 'error' : extension.adapter.provider ? 'success' : 'info'"
-        :closable="false"
-        show-icon
-      />
-      <p class="detected-host">当前识别页：{{ detectedHost }}</p>
-      <el-button class="refresh" plain @click="extension.refreshAdapter">重新识别</el-button>
-      <h2>填入当前 AI</h2>
-      <el-input
-        v-model="extension.prompt"
-        type="textarea"
-        :rows="4"
-        placeholder="输入要填入当前网页输入框的内容"
-        :disabled="!extension.adapter.provider"
-      />
-      <div class="filter-row">
-        <el-select v-model="extension.skillOverrideId" class="filter-select" clearable placeholder="下一次发送：自动匹配">
-          <el-option v-for="skill in extension.skills" :key="`override-${skill.id}`" :label="`强制使用：${skill.manifest.name}`" :value="skill.id" />
-        </el-select>
-        <el-button :disabled="!extension.skillOverrideId || extension.skillOverrideId === '__disabled__'" @click="extension.setSkillRequestOverride(extension.skillOverrideId)">本次强制使用</el-button>
-        <el-button @click="extension.setSkillRequestOverride(undefined, true)">本次禁用</el-button>
-      </div>
-      <el-button
-        class="primary-action"
-        type="primary"
-        :loading="extension.inserting"
-        :disabled="!extension.adapter.provider || !extension.prompt.trim()"
-        @click="extension.insertPrompt"
-      >
-        填入输入框
-      </el-button>
-      <el-alert
-        v-if="extension.insertError"
-        class="action-error"
-        :title="extension.insertError"
-        type="error"
-        :closable="false"
-      />
-    </section>
-
-    <section v-if="activePanel === 'chat'" class="capability-card">
-      <h2>当前问答</h2>
-      <el-alert
-        v-if="extension.conversationError"
-        class="action-error"
-        :title="extension.conversationError"
-        type="warning"
-        :closable="false"
-      />
-      <div class="message-block">
-        <span class="message-role">问题</span>
-        <p v-if="extension.latestQuestion" class="response-text">{{ extension.latestQuestion }}</p>
-        <p v-else class="empty-text">尚未读取到问题</p>
-      </div>
-      <div class="message-block">
-        <span class="message-role">回复</span>
-      <p v-if="extension.latestResponse" class="response-text">{{ extension.latestResponse }}</p>
-        <p v-else class="empty-text">等待 AI 回复</p>
-      </div>
-    </section>
 
     <section v-if="activePanel === 'conversations'" class="capability-card detail-card">
       <div class="section-heading">

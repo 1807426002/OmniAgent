@@ -20,6 +20,7 @@ export default defineContentScript({
       isChatRequest: isKimiChatPath,
       extractPrompt: extractKimiPrompt,
       applyPrompt: applyKimiPrompt,
+      rewriteProtobufPrompt: true,
     });
   },
 });

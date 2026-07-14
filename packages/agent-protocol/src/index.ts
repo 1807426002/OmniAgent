@@ -1,4 +1,4 @@
-export { parseAgentDecision, validateDecision } from './parser.js';
+export { isInternalProtocolMessage, parseAgentDecision, validateDecision } from './parser.js';
 export { buildContinuationPrompt } from './prompts.js';
 export { serializeAgentDecision, serializeToolResult } from './serializer.js';
 export type {

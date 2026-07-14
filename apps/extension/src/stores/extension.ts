@@ -45,6 +45,8 @@ const unsupported: AdapterStatus = {
   conversationId: null,
 };
 
+let adapterEventsStarted = false;
+
 export const useExtensionStore = defineStore('extension', {
   state: () => ({
     ready: true,
@@ -162,6 +164,16 @@ export const useExtensionStore = defineStore('extension', {
         void this.refreshMemoryDiagnostic();
         void this.refreshSavedConversations();
         return undefined;
+      });
+    },
+    startAdapterListener() {
+      if (adapterEventsStarted) return;
+      adapterEventsStarted = true;
+      browser.tabs.onActivated.addListener(() => {
+        void this.refreshAdapter();
+      });
+      browser.tabs.onUpdated.addListener((_tabId, changeInfo) => {
+        if (changeInfo.url || changeInfo.status === 'complete') void this.refreshAdapter();
       });
     },
     async handleAutomaticMemoryChange(content?: string) {

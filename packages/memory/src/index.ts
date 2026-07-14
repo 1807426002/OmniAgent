@@ -379,7 +379,8 @@ function looksLikeUserQuestion(content: string): boolean {
 }
 function isIncompleteMemory(content: string): boolean {
   const normalized = content.trim().replace(/[，。！？!?…]+$/gu, '');
-  return /^(?:我)?(?:不喜欢|喜欢|偏好|讨厌|爱吃|不爱吃)(?:吃)?$/u.test(normalized);
+  return /^(?:我)?(?:不喜欢|喜欢|偏好|讨厌|爱吃|不爱吃)(?:吃)?$/u.test(normalized)
+    || /^(?:我)?(?:不喜欢|喜欢|偏好|讨厌|爱吃|不爱吃)(?:吃)?(?:什么|啥|哪些|哪种|哪类)$/u.test(normalized);
 }
 function inferMemoryType(content: string): MemoryType {
   if (/我(喜欢|偏好|习惯|通常|不喜欢)/u.test(content) || /(?:请|以后|今后).{0,80}(?:回复|回答|表达|格式|语言)/u.test(content)) return 'preference';

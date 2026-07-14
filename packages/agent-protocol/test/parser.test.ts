@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildContinuationPrompt, parseAgentDecision, serializeAgentDecision, serializeToolResult } from '../src/index.js';
+import { buildContinuationPrompt, isInternalProtocolMessage, parseAgentDecision, serializeAgentDecision, serializeToolResult } from '../src/index.js';
 
 test('parses a tool call inside model prose', () => {
   const parsed = parseAgentDecision(`我将先查看页面。\n<omniagent-action>\n{"type":"tool_call","toolName":"browser.snapshot","arguments":{}}\n</omniagent-action>`);
@@ -36,6 +36,12 @@ test('serializes decisions in the required envelope', () => {
 
 test('serializes tool results for model continuation', () => {
   assert.match(serializeToolResult({ name: 'memory.save', ok: true, result: { id: 'm1' } }), /<omniagent-tool-result>/);
+});
+
+test('recognizes provider-side internal protocol messages', () => {
+  assert.equal(isInternalProtocolMessage('<omniagent-action>{"type":"finish"}</omniagent-action>'), true);
+  assert.equal(isInternalProtocolMessage('<omniagent-tool-result>{}</omniagent-tool-result>'), true);
+  assert.equal(isInternalProtocolMessage('这是正常给用户看的回复'), false);
 });
 
 test('builds a bounded continuation prompt with the protocol contract', () => {

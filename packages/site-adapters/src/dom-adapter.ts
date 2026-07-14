@@ -30,8 +30,8 @@ export class DomSiteAdapter implements SiteAdapter {
   async sendMessage(message: string): Promise<void> {
     await this.insertPrompt(message);
 
-    const submit = this.findElement<HTMLButtonElement>(this.options.submitSelectors);
-    if (!submit || submit.disabled) throw new Error(`${this.id}: send button was not found or disabled`);
+    const submit = await this.waitForEnabledSubmit();
+    if (!submit) throw new Error(`${this.id}: send button was not found or did not become enabled`);
     submit.click();
   }
 
@@ -50,6 +50,17 @@ export class DomSiteAdapter implements SiteAdapter {
     input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertFromPaste', data: message }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
     input.focus();
+  }
+
+  hideInternalProtocolMessages(): void {
+    const selector = this.options.messageSelectors.join(',');
+    const marked = Array.from(document.querySelectorAll(selector))
+      .filter((element) => /<omniagent-(?:action|tool-result)\b/iu.test(element.textContent ?? ''));
+    const leafMessages = marked.filter((element) => !marked.some((candidate) => candidate !== element && element.contains(candidate)));
+    for (const element of leafMessages) {
+      element.setAttribute('data-omniagent-internal', 'true');
+      (element as HTMLElement).style.setProperty('display', 'none', 'important');
+    }
   }
 
   getLatestTurn(): ConversationTurn {
@@ -138,6 +149,16 @@ export class DomSiteAdapter implements SiteAdapter {
     for (const selector of selectors) {
       const element = document.querySelector<T>(selector);
       if (element) return element;
+    }
+    return null;
+  }
+
+  private async waitForEnabledSubmit(): Promise<HTMLButtonElement | null> {
+    const deadline = Date.now() + 1_000;
+    while (Date.now() < deadline) {
+      const submit = this.findElement<HTMLButtonElement>(this.options.submitSelectors);
+      if (submit && !submit.disabled) return submit;
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 16));
     }
     return null;
   }

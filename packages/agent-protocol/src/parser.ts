@@ -1,6 +1,12 @@
 import type { AgentDecision, ParseDecisionResult } from './types.js';
 
 const ACTION_PATTERN = /<omniagent-action\s*>([\s\S]*?)<\/omniagent-action\s*>/i;
+const INTERNAL_PROTOCOL_PATTERN = /<omniagent-(?:action|tool-result)\b/i;
+
+/** True when text belongs to OmniAgent's hidden provider-side tool loop. */
+export function isInternalProtocolMessage(text: string): boolean {
+  return INTERNAL_PROTOCOL_PATTERN.test(text);
+}
 
 /**
  * Parses the single structured action emitted by a web model.

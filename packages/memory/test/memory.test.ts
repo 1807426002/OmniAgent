@@ -85,6 +85,8 @@ test('never saves a user question as a profile or preference fact', async (t) =>
   const { memory } = createMemory(t);
   assert.equal(await memory.extractExplicitUserMemory('我叫什么，不喜欢吃什么', { policy: 'auto_safe' }), null);
   assert.equal(await memory.extractExplicitUserMemory('我叫什么？', { policy: 'auto_safe' }), null);
+  assert.equal(await memory.extractExplicitUserMemory('我喜欢吃什么。', { policy: 'auto_safe' }), null);
+  assert.equal(await memory.extractExplicitUserMemory('我不喜欢吃哪些？', { policy: 'auto_safe' }), null);
   assert.equal((await memory.list()).length, 0);
 });
 

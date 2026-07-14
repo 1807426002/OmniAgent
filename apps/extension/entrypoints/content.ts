@@ -13,6 +13,10 @@ export default defineContentScript({
     const disposeBridge = installMainWorldBridge('deepseek');
     const adapter = adapters.find(window.location.href);
     const pageSessionId = globalThis.crypto?.randomUUID?.() ?? `page-${Date.now().toString(36)}`;
+    const hideInternalProtocolMessages = () => adapter?.hideInternalProtocolMessages();
+    hideInternalProtocolMessages();
+    const internalMessageObserver = new MutationObserver(hideInternalProtocolMessages);
+    internalMessageObserver.observe(document, { childList: true, subtree: true, characterData: true });
     const status = (): AdapterStatus => ({
       provider: providerFromAdapter(adapter),
       url: window.location.href,
@@ -92,6 +96,7 @@ export default defineContentScript({
       browser.runtime.onMessage.removeListener(handleMessage);
       stopMessages?.();
       stopResponses?.();
+      internalMessageObserver.disconnect();
       disposeBridge();
     });
 

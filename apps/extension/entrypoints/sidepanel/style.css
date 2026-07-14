@@ -24,10 +24,20 @@ h1 { margin: 0; font-size: 30px; line-height: 1.15; letter-spacing: -.04em; }
 }
 .overview-card:hover { background: #e9f1fb; border-color: #bfdbfe; }
 .overview-card:active { transform: scale(.98); }
-.overview-card:focus-visible, .quick-card:focus-visible, .settings-link:focus-visible { outline: 3px solid #60a5fa; outline-offset: 2px; }
+.overview-card:focus-visible, .settings-link:focus-visible { outline: 3px solid #60a5fa; outline-offset: 2px; }
 .overview-card strong { display: block; font-size: 18px; color: #0f172a; }
 .overview-card span { color: #64748b; font-size: 11px; letter-spacing: .04em; }
-.quick-card {
+.provider-section { margin-top: 16px; }
+.provider-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+.provider-card {
+  display: grid; gap: 4px; min-height: 64px; padding: 10px; border: 1px solid #dbe4ef; border-radius: 10px;
+  background: #fff; color: #334155; cursor: pointer; font: inherit; text-align: left; transition: border-color .18s ease, background-color .18s ease;
+}
+.provider-card:hover { border-color: #93c5fd; background: #f8fbff; }
+.provider-card.connected { border-color: #86efac; background: #f0fdf4; color: #166534; }
+.provider-card strong { font-size: 13px; }
+.provider-card span { font-size: 11px; }
+.active-ai-card {
   display: grid;
   gap: 4px;
   width: 100%;
@@ -38,16 +48,12 @@ h1 { margin: 0; font-size: 30px; line-height: 1.15; letter-spacing: -.04em; }
   border-radius: 12px;
   background: #f8fbff;
   color: #1e3a5f;
-  cursor: pointer;
   text-align: left;
-  touch-action: manipulation;
-  transition: background-color .18s ease, border-color .18s ease, transform .18s ease;
 }
-.quick-card:hover { border-color: #93c5fd; background: #eff6ff; }
-.quick-card:active { transform: scale(.99); }
+.active-ai-card.connected { border-color: #86efac; background: #f0fdf4; color: #166534; }
 .quick-card-label { color: #64748b; font-size: 11px; font-weight: 700; letter-spacing: .08em; }
-.quick-card strong { font-size: 16px; }
-.quick-card span:last-child { color: #64748b; font-size: 12px; }
+.active-ai-card strong { font-size: 16px; }
+.active-ai-card span:last-child { color: #64748b; font-size: 12px; }
 .settings-link { min-height: 44px; margin-top: 8px; padding: 0; border: 0; background: transparent; color: #475569; cursor: pointer; font: inherit; font-size: 13px; }
 .settings-link:hover { color: #2563eb; }
 .detail-header { display: flex; align-items: center; gap: 10px; min-height: 44px; margin-bottom: 8px; }
