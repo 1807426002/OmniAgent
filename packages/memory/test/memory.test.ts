@@ -57,6 +57,37 @@ test('automatic explicit user memory follows review policy and cannot enter reca
   assert.equal((await memory.retrieve('请简洁回答')).length, 1);
 });
 
+test('automatically saves durable user profile statements under the safe policy', async (t) => {
+  const { memory } = createMemory(t);
+  const saved = await memory.extractExplicitUserMemory('我家有一个正在上幼儿园的孩子', { policy: 'auto_safe' });
+  assert.equal(saved?.type, 'profile');
+  assert.equal((await memory.list()).length, 1);
+});
+
+test('automatically saves named people from concise user facts', async (t) => {
+  const { memory } = createMemory(t);
+  const saved = await memory.extractExplicitUserMemory('朋友名字叫小白', { policy: 'auto_safe' });
+  assert.equal(saved?.type, 'profile');
+  assert.equal(saved?.content, '朋友名字叫小白');
+});
+
+test('does not save a standalone unfinished preference and injects a complete preference across conversations', async (t) => {
+  const { memory } = createMemory(t);
+  assert.equal(await memory.extractExplicitUserMemory('我不喜欢吃', { policy: 'auto_safe' }), null);
+  const saved = await memory.extractExplicitUserMemory('我不喜欢吃香菜', { policy: 'auto_safe' });
+  assert.equal(saved?.type, 'preference');
+  const matches = await memory.retrieve('我们聊点别的事情', { providerId: 'kimi' });
+  assert.equal(matches.some((item) => item.memory.content === '我不喜欢吃香菜'), true);
+  assert.match(memory.formatContext(matches), /香菜/);
+});
+
+test('never saves a user question as a profile or preference fact', async (t) => {
+  const { memory } = createMemory(t);
+  assert.equal(await memory.extractExplicitUserMemory('我叫什么，不喜欢吃什么', { policy: 'auto_safe' }), null);
+  assert.equal(await memory.extractExplicitUserMemory('我叫什么？', { policy: 'auto_safe' }), null);
+  assert.equal((await memory.list()).length, 0);
+});
+
 test('different automatic values for the same canonical key become a conflict candidate', async (t) => {
   const { memory } = createMemory(t);
   await memory.save({ type: 'preference', content: '我喜欢简洁的中文回复' });
@@ -90,8 +121,11 @@ test('scope isolates project facts and preserves global facts across providers',
   await memory.save({ type: 'preference', content: '我喜欢简洁的中文回复', scope: 'global' });
   await memory.save({ type: 'project', content: '本项目使用 pnpm', scope: 'project', projectId: 'p1' });
   assert.equal((await memory.retrieve('请简洁回答', { providerId: 'kimi' })).length, 1);
-  assert.equal((await memory.retrieve('pnpm', { projectId: 'p2' })).length, 0);
-  assert.equal((await memory.retrieve('pnpm', { projectId: 'p1' })).length, 1);
+  const otherProject = await memory.retrieve('pnpm', { projectId: 'p2' });
+  assert.equal(otherProject.length, 1);
+  assert.equal(otherProject[0]?.memory.scope, 'global');
+  const activeProject = await memory.retrieve('pnpm', { projectId: 'p1' });
+  assert.equal(activeProject.some((item) => item.memory.scope === 'project'), true);
 });
 
 test('ranks the active project scope ahead of an equally relevant global fact', async (t) => {

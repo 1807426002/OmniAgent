@@ -57,11 +57,34 @@ export default defineContentScript({
 
     browser.runtime.onMessage.addListener(handleMessage);
 
+    let runtimeUnavailable = false;
     const sendUpdate = (payload: ExtensionMessageMap['omni:response-update']) => {
-      void browser.runtime.sendMessage<ExtensionMessage<'omni:response-update'>>({
-        type: 'omni:response-update',
-        payload,
-      });
+      if (runtimeUnavailable) return;
+      try {
+        // Accessing ctx.isValid can itself touch a revoked runtime proxy after an
+        // extension reload. Probe the runtime only inside this try block instead.
+        const runtime = browser.runtime;
+        if (!runtime?.id) {
+          runtimeUnavailable = true;
+          return;
+        }
+        void runtime.sendMessage<ExtensionMessage<'omni:response-update'>>({
+          type: 'omni:response-update',
+          payload,
+        }).catch((error) => {
+          if (/extension context invalidated|context invalidated/iu.test(error instanceof Error ? error.message : String(error))) {
+            runtimeUnavailable = true;
+          } else {
+            console.warn('[OmniAgent] response observer unavailable', error);
+          }
+        });
+      } catch (error) {
+        if (/extension context invalidated|context invalidated/iu.test(error instanceof Error ? error.message : String(error))) {
+          runtimeUnavailable = true;
+        } else {
+          console.warn('[OmniAgent] response observer unavailable', error);
+        }
+      }
     };
     const stopMessages = adapter?.observeMessages(({ id, role, text }) => {
       if (role !== 'user') return;

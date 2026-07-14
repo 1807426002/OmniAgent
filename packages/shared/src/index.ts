@@ -146,6 +146,14 @@ export interface ExtensionMessageMap {
     pageSessionId?: string;
     state?: 'partial' | 'settled';
   };
+  'omni:capture-user-memory': {
+    provider: SupportedProvider;
+    text: string;
+    conversationId?: string | null;
+  };
+  'omni:memory-changed': {
+    content: string;
+  };
 }
 
 export type ExtensionMessage<T extends keyof ExtensionMessageMap = keyof ExtensionMessageMap> = {

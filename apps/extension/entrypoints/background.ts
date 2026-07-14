@@ -27,6 +27,7 @@ const toolHistoryKey = 'tool-execution-history';
 const skillRequestOverrideKey = 'skill-request-override';
 const MAX_TOOL_HISTORY = 50;
 const handledModelActions = new Set<string>();
+const recentMemoryCaptures = new Map<string, number>();
 
 interface ToolHistoryItem {
   id: string;
@@ -120,6 +121,9 @@ export default defineBackground(() => {
   void skills.ensureReady().catch(console.error);
   // Legacy data is migrated incrementally and never deleted during startup.
   void memory.migrateLegacy().catch(console.error);
+  // Older builds could mistake a recall question for a profile statement. Those
+  // candidates are not user memories and should not remain in the review queue.
+  void rejectQuestionLikeMemoryCandidates().catch(console.error);
   void getRuntimeSettings().then((settings) => {
     if (settings.browserControlEnabled) ensureBrowserControlEnabled();
   }).catch(console.error);
@@ -161,6 +165,18 @@ export default defineBackground(() => {
     if (message.type === 'omni:response-update') {
       await persistPageMessage(message as ExtensionMessage<'omni:response-update'>);
       await handleModelToolCall(message as ExtensionMessage<'omni:response-update'>);
+      return undefined;
+    }
+    if (message.type === 'omni:capture-user-memory') {
+      const payload = message.payload as ExtensionMessage<'omni:capture-user-memory'>['payload'];
+      if (payload?.text?.trim()) {
+        const projectId = await storage.getActiveProjectId();
+        const conversation = payload.conversationId
+          ? await storage.getOrCreateConversation({ providerId: payload.provider, externalId: payload.conversationId, projectId })
+          : null;
+        const content = await captureUserMemory(payload.text, payload.provider, projectId, conversation?.id);
+        if (content) notifyMemoryChanged(content);
+      }
       return undefined;
     }
     if (message.type === 'omni:list-conversations') {
@@ -1008,14 +1024,72 @@ async function persistPageMessage(message: ExtensionMessage<'omni:response-updat
   });
   await archiveConversationTurns(conversation.id, payload.provider, conversation.projectId);
   if (payload.role === 'user') {
-    const settings = await getRuntimeSettings();
-    if (settings.memorySaveMode !== 'off') {
-      await memory.extractExplicitUserMemory(payload.text, {
-        projectId: activeProjectId,
-        policy: toMemoryWritePolicy(settings.memorySaveMode),
-      });
-    }
+    const content = await captureUserMemory(payload.text, payload.provider, activeProjectId, conversation.id);
+    if (content) notifyMemoryChanged(content);
   }
+}
+
+async function captureUserMemory(
+  text: string,
+  providerId: 'deepseek' | 'kimi',
+  knownProjectId?: string | null,
+  conversationId?: string,
+): Promise<string | null> {
+  const normalized = await completeContextualPreference(text, conversationId);
+  if (!normalized) return null;
+  const key = `${providerId}:${normalized.normalize('NFKC').replace(/\s+/gu, ' ').toLocaleLowerCase()}`;
+  const now = Date.now();
+  for (const [item, at] of recentMemoryCaptures) {
+    if (now - at > 15_000) recentMemoryCaptures.delete(item);
+  }
+  if (recentMemoryCaptures.has(key)) return null;
+  recentMemoryCaptures.set(key, now);
+  const settings = await getRuntimeSettings();
+  if (settings.memorySaveMode === 'off') return null;
+  const projectId = knownProjectId === undefined ? await storage.getActiveProjectId() : knownProjectId;
+  const saved = await memory.extractExplicitUserMemory(normalized, {
+    projectId,
+    policy: toMemoryWritePolicy(settings.memorySaveMode),
+  });
+  return saved?.content ?? null;
+}
+
+function notifyMemoryChanged(content: string): void {
+  void browser.runtime.sendMessage<ExtensionMessage<'omni:memory-changed'>>({
+    type: 'omni:memory-changed',
+    payload: { content },
+  }).catch(() => undefined);
+}
+
+async function completeContextualPreference(text: string, conversationId?: string): Promise<string> {
+  const normalized = text.trim();
+  if (!/^(?:我)?不喜欢吃[，。！？!?…]*$/u.test(normalized) || !conversationId) return normalized;
+  const messages = await storage.listMessages(conversationId);
+  // The current user message has already been persisted. Search preceding turns for
+  // the latest concrete food object, e.g. “他俩喜欢吃骨头” → “我不喜欢吃骨头”.
+  for (const message of messages.slice().reverse()) {
+    if (message.role === 'user' && message.content.trim() === normalized) continue;
+    const matches = [...message.content.matchAll(/(?:喜欢|爱|想)吃(?:了)?\s*([^，。！？!?；;、\s]{1,16})/gu)];
+    const food = matches.at(-1)?.[1]?.trim();
+    if (food) return `我不喜欢吃${food}`;
+  }
+  return normalized;
+}
+
+async function rejectQuestionLikeMemoryCandidates(): Promise<void> {
+  const candidates = await storage.listMemoryCandidates();
+  const question = /[？?]/u;
+  const implicitQuestion = /^(?:我|我的).{0,120}(?:什么|谁|哪里|哪儿|怎么|为何|是否|吗|么)(?:[，。！？!?]|$)/u;
+  await Promise.all(candidates.filter((candidate) =>
+    candidate.sourceKind === 'user_message'
+    && (question.test(candidate.proposedValue) || implicitQuestion.test(candidate.proposedValue.trim()))
+    && (candidate.status === 'pending' || candidate.status === 'conflict')
+  ).map((candidate) => storage.saveMemoryCandidate({
+    ...candidate,
+    status: 'rejected',
+    reason: 'A user question is not a memory fact',
+    updatedAt: Date.now(),
+  })));
 }
 
 async function archiveConversationTurns(conversationId: string, providerId: 'deepseek' | 'kimi', projectId: string | null): Promise<void> {
@@ -1077,7 +1151,7 @@ async function getRuntimeSettings(): Promise<RuntimeSettings> {
     injectSkills: stored?.injectSkills ?? true,
     injectTools: stored?.injectTools ?? true,
     injectProject: stored?.injectProject ?? true,
-    memorySaveMode: stored?.memorySaveMode ?? 'confirm',
+    memorySaveMode: stored?.memorySaveMode ?? 'auto',
     browserControlEnabled: stored?.browserControlEnabled ?? false,
   };
 }

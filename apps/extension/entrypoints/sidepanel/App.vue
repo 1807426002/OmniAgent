@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import type { ToolResult } from '@omni-agent/tools';
 import { useExtensionStore } from '../../src/stores/extension';
 
@@ -55,6 +55,47 @@ const activeProject = computed(
 type PanelId = 'overview' | 'chat' | 'conversations' | 'memory' | 'skills' | 'tools' | 'tasks' | 'projects' | 'settings';
 
 const activePanel = ref<PanelId>('overview');
+type MemoryView = 'home' | 'layer' | 'review' | 'manage';
+type MemoryLayerId = 'profile' | 'preference' | 'knowledge' | 'context';
+const memoryView = ref<MemoryView>('home');
+const selectedMemoryLayer = ref<MemoryLayerId>('profile');
+const memoryLayers: Array<{ id: MemoryLayerId; title: string; description: string; types: string[] }> = [
+  { id: 'profile', title: '个人档案', description: '稳定身份、关系与长期背景', types: ['profile'] },
+  { id: 'preference', title: '偏好习惯', description: '表达方式、饮食与常用选择', types: ['preference'] },
+  { id: 'knowledge', title: '知识事实', description: '可复用的事实与经验结论', types: ['knowledge'] },
+  { id: 'context', title: '项目与情境', description: '项目约束、流程和阶段事件', types: ['project', 'procedure', 'episode'] },
+];
+const activeMemoryLayer = computed(() => memoryLayers.find((layer) => layer.id === selectedMemoryLayer.value) ?? memoryLayers[0]);
+const visibleLayerMemories = computed(() => extension.memories.filter((memory) => activeMemoryLayer.value.types.includes(memory.type)));
+
+function openMemoryLayer(layer: MemoryLayerId) {
+  selectedMemoryLayer.value = layer;
+  memoryView.value = 'layer';
+}
+
+function openMemoryView(view: Exclude<MemoryView, 'layer'>) {
+  memoryView.value = view;
+}
+
+function backToMemoryHome() {
+  memoryView.value = 'home';
+}
+
+function candidateLabel(candidate: { status: string; canonicalKey: string }): string {
+  if (candidate.status !== 'conflict') return '待确认的记忆';
+  const field = candidate.canonicalKey === 'user.profile.name' ? '姓名'
+    : candidate.canonicalKey === 'user.profile.location' ? '所在地'
+      : candidate.canonicalKey === 'user.profile.occupation' ? '职业'
+        : candidate.canonicalKey === 'user.preference.response.language' ? '回复语言'
+          : candidate.canonicalKey === 'user.preference.response.verbosity' ? '回复长度'
+            : '同一项记忆';
+  return `与已有${field}不一致`;
+}
+
+function candidateReason(candidate: { status: string; reason?: string | null }): string {
+  if (candidate.status === 'conflict') return '确认后将用下方内容更新该记忆；忽略则保留原内容。';
+  return candidate.reason || '请确认这是否是你希望长期保留的信息。';
+}
 const panelTitles: Record<Exclude<PanelId, 'overview'>, string> = {
   chat: '当前 AI',
   conversations: '本地会话',
@@ -87,6 +128,12 @@ const agentPresets = [
 function applyAgentPreset(goal: string) {
   extension.agentGoalDraft = goal;
 }
+
+watch(() => extension.memoryNewItemId, async (id) => {
+  if (!id || activePanel.value !== 'memory' || memoryView.value !== 'layer') return;
+  await nextTick();
+  document.querySelector<HTMLElement>(`[data-memory-id="${id}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+});
 
 onMounted(() => {
   extension.startResponseListener();
@@ -273,34 +320,93 @@ onUnmounted(() => {
 
     <section v-if="activePanel === 'memory'" class="capability-card detail-card">
       <div class="section-heading">
-        <h2>长期记忆</h2>
+        <div class="memory-heading">
+          <el-button v-if="memoryView !== 'home'" text size="small" @click="backToMemoryHome">← 记忆中心</el-button>
+          <h2>{{ memoryView === 'home' ? '记忆中心' : memoryView === 'layer' ? activeMemoryLayer.title : memoryView === 'review' ? '待处理记忆' : '管理与整理' }}</h2>
+        </div>
         <div class="heading-actions">
-          <el-button text :loading="extension.memoryLoading" @click="extension.refreshMemories(); extension.refreshMemoryCandidates(); extension.refreshSessionChunks(); extension.refreshMemoryDiagnostic()">刷新</el-button>
-          <el-button text :loading="extension.memoryLoading" @click="extension.deduplicateMemories">检查与整理</el-button>
-          <el-button text type="danger" :loading="extension.memoryLoading" @click="extension.clearMemories">清空</el-button>
+          <el-button text :loading="extension.memoryLoading" @click="extension.refreshMemories(); extension.refreshMemoryCandidates(); extension.refreshMemoryDiagnostic()">同步</el-button>
         </div>
       </div>
-      <p v-if="extension.memoryDiagnostic" class="detected-host">
-        注入诊断：{{ extension.memoryDiagnostic.detail }}
-        <template v-if="extension.memoryDiagnostic.stage === 'memory-injected'">（{{ extension.memoryDiagnostic.count }} 条）</template>
-      </p>
-      <ul v-if="extension.memoryDiagnostic?.items?.length" class="memory-list memory-diagnostic-list">
-        <li v-for="item in extension.memoryDiagnostic.items" :key="item.id">
-          <span class="message-role">{{ item.scope }} · 匹配分 {{ item.score.toFixed(1) }}</span>
-          <p>{{ item.summary }}</p>
-          <p class="skill-triggers">原因：{{ item.reason }}</p>
-        </li>
-      </ul>
-      <div class="filter-row">
+
+      <template v-if="memoryView === 'home'">
+        <p class="memory-intro">长期信息按层管理；聊天原文只保存在“本地会话”，不会混入这里。</p>
+        <div class="memory-layer-grid">
+          <button v-for="layer in memoryLayers" :key="layer.id" class="memory-layer-card" type="button" @click="openMemoryLayer(layer.id)">
+            <span class="memory-layer-count">{{ extension.memories.filter((memory) => layer.types.includes(memory.type)).length }}</span>
+            <span class="memory-layer-title">{{ layer.title }}</span>
+            <span class="memory-layer-description">{{ layer.description }}</span>
+          </button>
+        </div>
+        <div class="memory-home-actions">
+          <button class="memory-route-card" type="button" @click="openMemoryView('review')">
+            <span><strong>待处理</strong><small>候选与冲突不会注入 AI</small></span>
+            <b>{{ extension.memoryCandidates.length }}</b>
+          </button>
+          <button class="memory-route-card" type="button" @click="openMemoryView('manage')">
+            <span><strong>添加与整理</strong><small>手动添加、搜索、检查与清理</small></span>
+            <b>→</b>
+          </button>
+        </div>
+        <p class="memory-chat-hint">聊天内容请到“本地会话”查看；会话摘要仅用于内部检索，不在记忆中心直接展开。</p>
+      </template>
+
+      <template v-else-if="memoryView === 'layer'">
+        <p class="memory-intro">{{ activeMemoryLayer.description }}</p>
+        <ul v-if="visibleLayerMemories.length" class="memory-list">
+          <li v-for="memory in visibleLayerMemories" :key="memory.id" class="memory-card" :data-memory-id="memory.id" @click="extension.selectMemory(memory.id)">
+            <div class="skill-item-header">
+              <span class="message-role">{{ memory.type }} · {{ memory.scope }}</span>
+              <div class="heading-actions">
+                <el-button text size="small" @click.stop="extension.toggleMemoryPinned(memory)">{{ memory.pinned ? '取消置顶' : '置顶' }}</el-button>
+                <el-button text size="small" @click.stop="extension.beginMemoryEdit(memory)">编辑</el-button>
+                <el-button text type="danger" size="small" @click.stop="extension.deleteMemory(memory.id)">删除</el-button>
+              </div>
+            </div>
+            <template v-if="extension.memoryEditId === memory.id">
+              <el-input v-model="extension.memoryEditContent" class="memory-input" type="textarea" :rows="3" />
+              <div class="agent-actions"><el-button size="small" @click="extension.cancelMemoryEdit">取消</el-button><el-button size="small" type="primary" @click="extension.saveMemoryEdit(memory)">保存</el-button></div>
+            </template>
+            <template v-else>
+              <p>{{ memory.summary }}</p>
+              <div v-if="extension.selectedMemoryId === memory.id" class="memory-detail">
+                <p><strong>完整内容</strong></p><p>{{ memory.content }}</p>
+                <p class="skill-triggers">置信度 {{ Math.round(memory.confidence * 100) }}% · 重要度 {{ Math.round(memory.importance * 100) }}%</p>
+                <template v-if="extension.selectedMemoryDetail?.fact.id === memory.id">
+                  <p class="skill-triggers">来源证据 {{ extension.selectedMemoryDetail.fact.sourceCount }} 条 · 修订 {{ extension.selectedMemoryDetail.revisions.length }} 次</p>
+                  <p v-if="extension.selectedMemoryDetail.evidence[0]" class="skill-triggers">最近依据：{{ extension.selectedMemoryDetail.evidence[0].excerpt }}</p>
+                </template>
+              </div>
+            </template>
+          </li>
+        </ul>
+        <p v-else class="empty-text">这一层还没有记忆</p>
+      </template>
+
+      <template v-else-if="memoryView === 'review'">
+        <p class="memory-intro">候选与冲突需要确认，确认前不会进入任何 AI 的上下文。</p>
+        <div v-if="extension.memoryCandidates.length" class="memory-candidate-section">
+          <article v-for="candidate in extension.memoryCandidates" :key="candidate.id" class="memory-candidate-card">
+            <div class="skill-item-header"><span class="message-role">{{ candidateLabel(candidate) }} · {{ candidate.type }} · {{ candidate.scope }}</span><span class="skill-triggers">{{ candidateReason(candidate) }}</span></div>
+            <el-input :model-value="extension.memoryCandidateEdit || candidate.proposedValue" class="memory-input" type="textarea" :rows="2" @focus="extension.memoryCandidateEdit = candidate.proposedValue" @update:model-value="(value: string) => extension.memoryCandidateEdit = value" />
+            <div class="agent-actions"><el-button size="small" type="primary" :loading="extension.memoryLoading" @click="extension.acceptMemoryCandidate(candidate)">确认保存</el-button><el-button size="small" :loading="extension.memoryLoading" @click="extension.rejectMemoryCandidate(candidate.id)">忽略</el-button></div>
+          </article>
+        </div>
+        <p v-else class="empty-text">没有待处理记忆</p>
+      </template>
+
+      <template v-else>
+        <p v-if="extension.memoryDiagnostic" class="detected-host">注入诊断：{{ extension.memoryDiagnostic.detail }}</p>
+        <div class="filter-row">
         <el-input
           v-model="extension.memoryQuery"
           class="filter-select"
           clearable
           placeholder="搜索记忆"
-          @keyup.enter="extension.refreshMemories(); extension.refreshSessionChunks()"
-          @clear="extension.refreshMemories(); extension.refreshSessionChunks()"
+          @keyup.enter="extension.refreshMemories"
+          @clear="extension.refreshMemories"
         />
-        <el-button :loading="extension.memoryLoading" @click="extension.refreshMemories(); extension.refreshSessionChunks()">搜索</el-button>
+        <el-button :loading="extension.memoryLoading" @click="extension.refreshMemories">搜索</el-button>
       </div>
       <div class="filter-row">
         <el-select
@@ -318,7 +424,7 @@ onUnmounted(() => {
           <el-option label="procedure" value="procedure" />
         </el-select>
         <label class="filter-check">
-          <el-switch v-model="extension.memoryProjectOnly" size="small" @change="extension.refreshMemories(); extension.refreshSessionChunks()" />
+          <el-switch v-model="extension.memoryProjectOnly" size="small" @change="extension.refreshMemories" />
           <span>含活动项目</span>
         </label>
       </div>
@@ -345,75 +451,13 @@ onUnmounted(() => {
       <el-button class="primary-action" type="primary" :disabled="!extension.memoryDraft.trim()" @click="extension.saveMemory">
         保存记忆
       </el-button>
+      <div class="heading-actions memory-maintenance-actions">
+        <el-button text :loading="extension.memoryLoading" @click="extension.deduplicateMemories">检查与整理</el-button>
+        <el-button text type="danger" :loading="extension.memoryLoading" @click="extension.clearMemories">清空所有长期记忆</el-button>
+      </div>
       <el-alert v-if="extension.memoryError" class="action-error" :title="extension.memoryError" type="error" :closable="false" />
       <el-alert v-if="extension.memoryMessage" class="action-error" :title="extension.memoryMessage" type="success" :closable="false" />
-      <div v-if="extension.memoryCandidates.length" class="memory-candidate-section">
-        <div class="section-heading compact-heading">
-          <h3>待确认 · {{ extension.memoryCandidates.length }}</h3>
-          <span class="empty-text">候选不会注入 AI</span>
-        </div>
-        <article v-for="candidate in extension.memoryCandidates" :key="candidate.id" class="memory-candidate-card">
-          <div class="skill-item-header">
-            <span class="message-role">{{ candidate.status === 'conflict' ? '冲突' : '候选' }} · {{ candidate.type }} · {{ candidate.scope }}</span>
-            <span class="skill-triggers">{{ candidate.reason || '等待确认' }}</span>
-          </div>
-          <el-input
-            :model-value="extension.memoryCandidateEdit || candidate.proposedValue"
-            class="memory-input"
-            type="textarea"
-            :rows="2"
-            @focus="extension.memoryCandidateEdit = candidate.proposedValue"
-            @update:model-value="(value: string) => extension.memoryCandidateEdit = value"
-          />
-          <div class="agent-actions">
-            <el-button size="small" type="primary" :loading="extension.memoryLoading" @click="extension.acceptMemoryCandidate(candidate)">确认保存</el-button>
-            <el-button size="small" :loading="extension.memoryLoading" @click="extension.rejectMemoryCandidate(candidate.id)">忽略</el-button>
-          </div>
-        </article>
-      </div>
-      <div v-if="extension.sessionChunks.length" class="session-archive-section">
-        <div class="section-heading compact-heading">
-          <h3>会话归档</h3>
-          <span class="empty-text">仅本地保存</span>
-        </div>
-        <article v-for="chunk in extension.sessionChunks" :key="chunk.id" class="session-chunk-card">
-          <span class="message-role">{{ chunk.providerId }} · {{ new Date(chunk.endedAt).toLocaleString() }}</span>
-          <p>{{ chunk.summary }}</p>
-        </article>
-      </div>
-      <ul v-if="extension.memories.length" class="memory-list">
-        <li v-for="memory in extension.memories" :key="memory.id" class="memory-card" @click="extension.selectMemory(memory.id)">
-          <div class="skill-item-header">
-            <span class="message-role">{{ memory.type }} · {{ memory.scope }}</span>
-            <div class="heading-actions">
-              <el-button text size="small" @click.stop="extension.toggleMemoryPinned(memory)">{{ memory.pinned ? '取消置顶' : '置顶' }}</el-button>
-              <el-button text size="small" @click.stop="extension.beginMemoryEdit(memory)">编辑</el-button>
-              <el-button text type="danger" size="small" @click.stop="extension.deleteMemory(memory.id)">删除</el-button>
-            </div>
-          </div>
-          <template v-if="extension.memoryEditId === memory.id">
-            <el-input v-model="extension.memoryEditContent" class="memory-input" type="textarea" :rows="3" />
-            <div class="agent-actions">
-              <el-button size="small" @click="extension.cancelMemoryEdit">取消</el-button>
-              <el-button size="small" type="primary" @click="extension.saveMemoryEdit(memory)">保存</el-button>
-            </div>
-          </template>
-          <template v-else>
-            <p>{{ memory.summary }}</p>
-            <div v-if="extension.selectedMemoryId === memory.id" class="memory-detail">
-              <p><strong>完整内容</strong></p>
-              <p>{{ memory.content }}</p>
-              <p class="skill-triggers">置信度 {{ Math.round(memory.confidence * 100) }}% · 重要度 {{ Math.round(memory.importance * 100) }}%</p>
-              <template v-if="extension.selectedMemoryDetail?.fact.id === memory.id">
-                <p class="skill-triggers">来源证据 {{ extension.selectedMemoryDetail.fact.sourceCount }} 条 · 修订 {{ extension.selectedMemoryDetail.revisions.length }} 次</p>
-                <p v-if="extension.selectedMemoryDetail.evidence[0]" class="skill-triggers">最近依据：{{ extension.selectedMemoryDetail.evidence[0].excerpt }}</p>
-                <p v-if="extension.selectedMemoryDetail.revisions[0]" class="skill-triggers">上次修订：{{ extension.selectedMemoryDetail.revisions[0].previousValue }} → {{ extension.selectedMemoryDetail.revisions[0].nextValue }}</p>
-              </template>
-            </div>
-          </template>
-        </li>
-      </ul>
-      <p v-else class="empty-text">暂无长期记忆</p>
+      </template>
     </section>
 
     <section v-if="activePanel === 'skills'" class="capability-card detail-card">

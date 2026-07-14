@@ -211,7 +211,9 @@ export class MemoryService {
 
   async retrieve(query: string, options: { providerId?: SupportedProvider; projectId?: string; limit?: number } = {}): Promise<MemoryMatch[]> {
     const queryKeywords = new Set(keywordsFor(query));
-    const facts = (await this.repository.listMemoryFacts({ status: 'active' })).filter((fact) => fact.injectionPolicy !== 'never' && isFactInScope(fact, options));
+    const facts = (await this.repository.listMemoryFacts({ status: 'active' })).filter((fact) =>
+      fact.injectionPolicy !== 'never' && !isIncompleteMemory(fact.value) && isFactInScope(fact, options),
+    );
     const candidates = facts.map((fact) => ({ fact, score: scoreFact(fact, queryKeywords, options) }))
       .filter((match) => match.score > 0)
       .sort((a, b) => b.score - a.score)
@@ -345,7 +347,7 @@ function prepare(input: MemoryProposalInput): PreparedMemory | null {
     type: input.type, scope, providerId, projectId, value, summary: input.summary?.trim() || summarize(value), normalizedValue,
     valueHash, canonicalKey: key, identityKey, dedupeKey: `${sourceKind}|${sourceMessageId ?? 'manual'}|${EXTRACTOR_VERSION}|${identityKey}|${valueHash}`,
     keywords: keywordsFor(value), importance: clamp(input.importance ?? 0.5), confidence: clamp(input.confidence ?? 0.8), pinned: input.pinned ?? false,
-    sensitivity: looksSecret(value) ? 'secret' : isPersonal(input.type) ? 'personal' : 'normal', injectionPolicy: looksSecret(value) ? 'never' : 'relevant',
+    sensitivity: looksSecret(value) ? 'secret' : isPersonal(input.type) ? 'personal' : 'normal', injectionPolicy: looksSecret(value) ? 'never' : input.type === 'preference' ? 'always' : 'relevant',
     sourceKind, sourceMessageId, explicitUserIntent: input.explicitUserIntent ?? sourceKind === 'manual', allowRevision: input.allowRevision ?? sourceKind === 'manual', reason: input.reason, policy: input.policy ?? 'review_all',
   };
 }
@@ -359,12 +361,32 @@ function toLegacyMemory(fact: MemoryFactRecord): MemoryRecord {
 }
 
 function isExplicitMemory(content: string): boolean {
-  if (content.length > 500 || /^(?:我是谁|谁是我)/u.test(content)) return false;
+  if (isIncompleteMemory(content)) return false;
+  if (content.length > 500 || looksLikeUserQuestion(content)) return false;
   if (/^(?:你好|您好|嗨|作为).{0,48}(?:AI|人工智能|助手|Kimi|DeepSeek)/iu.test(content)) return false;
-  return /^(请)?(帮我)?记(?:住|下)[：:\s]/u.test(content) || /^我(喜欢|偏好|习惯|通常|不喜欢|叫|是(?!谁)|的名字是|住在|在|的职业|的工作)/u.test(content);
+  return /^(请)?(帮我)?记(?:住|下)[：:\s]/u.test(content)
+    || /^我(喜欢|偏好|习惯|通常|不喜欢|叫|是(?!谁)|的名字是|住在|在|的职业|的工作|有|家有|正在使用)/u.test(content)
+    || /^我的(?:孩子|家人|公司|团队|项目|设备|工作)/u.test(content)
+    || /^(?:我的)?(?:朋友|孩子|宠物|家人|同事|客户|同学).{0,32}(?:叫|是|有)/u.test(content)
+    || /^(?:本|这个)项目(?:使用|采用|要求|禁止|必须|约定)/u.test(content)
+    || /^(?:请|以后|今后).{0,80}(?:用|保持|不要|优先|避免).{0,80}(?:回复|回答|表达|格式|语言)/u.test(content);
 }
-function isAutoCapturedNoise(content: string): boolean { return /^(?:我是谁|谁是我)/u.test(content.trim()) || /^(?:你好|您好|嗨|作为).{0,48}(?:AI|人工智能|助手|Kimi|DeepSeek)/iu.test(content.trim()) || /\bplain\s+复制/u.test(content); }
-function inferMemoryType(content: string): MemoryType { return /我(喜欢|偏好|习惯|通常|不喜欢)/u.test(content) ? 'preference' : /我(叫|是|的名字是)|我住在|我的职业|我的工作/u.test(content) ? 'profile' : 'knowledge'; }
+function isAutoCapturedNoise(content: string): boolean { return looksLikeUserQuestion(content) || /^(?:你好|您好|嗨|作为).{0,48}(?:AI|人工智能|助手|Kimi|DeepSeek)/iu.test(content.trim()) || /\bplain\s+复制/u.test(content); }
+function looksLikeUserQuestion(content: string): boolean {
+  const normalized = content.trim();
+  if (/[？?]/u.test(normalized) || /^(?:我是谁|谁是我)/u.test(normalized)) return true;
+  return /^(?:我|我的).{0,120}(?:什么|谁|哪里|哪儿|怎么|为何|是否|吗|么)(?:[，。！？!?]|$)/u.test(normalized);
+}
+function isIncompleteMemory(content: string): boolean {
+  const normalized = content.trim().replace(/[，。！？!?…]+$/gu, '');
+  return /^(?:我)?(?:不喜欢|喜欢|偏好|讨厌|爱吃|不爱吃)(?:吃)?$/u.test(normalized);
+}
+function inferMemoryType(content: string): MemoryType {
+  if (/我(喜欢|偏好|习惯|通常|不喜欢)/u.test(content) || /(?:请|以后|今后).{0,80}(?:回复|回答|表达|格式|语言)/u.test(content)) return 'preference';
+  if (/^(?:本|这个)项目/u.test(content)) return 'project';
+  if (/我(叫|是|的名字是|有|家有|正在使用)/u.test(content) || /^(?:我的)?(?:朋友|孩子|宠物|家人|同事|客户|同学).{0,32}(?:叫|是|有)/u.test(content) || /^我的(?:孩子|家人|公司|团队|设备|工作)/u.test(content) || /我住在|我的职业|我的工作/u.test(content)) return 'profile';
+  return 'knowledge';
+}
 function normalizeMemoryContent(content: string): string { return content.replace(/^(请)?(帮我)?记(?:住|下)[：:\s]*/u, '').trim() || content; }
 function normalizeValue(content: string): string { return content.normalize('NFKC').trim().replace(/\s+/gu, ' ').replace(/[，、]/gu, ',').replace(/[。！]/gu, '.').toLocaleLowerCase(); }
 function canonicalKey(type: MemoryType, content: string): string {
@@ -381,12 +403,13 @@ function scopeKey(scope: MemoryScope, providerId: SupportedProvider | null, proj
 function keywordsFor(content: string): string[] { const normalized = content.toLocaleLowerCase(); const values = new Set(normalized.match(/[a-z0-9_]{2,}/gu) ?? []); for (const run of normalized.match(/[\p{Script=Han}]+/gu) ?? []) { const chars = [...run]; chars.forEach((char) => values.add(char)); for (let i = 0; i < chars.length - 1; i += 1) values.add(`${chars[i]}${chars[i + 1]}`); } return [...values]; }
 function scoreFact(fact: MemoryFactRecord, query: Set<string>, options: { providerId?: SupportedProvider; projectId?: string }): number {
   const overlap = fact.keywords.filter((word) => query.has(word)).length;
-  if (!overlap) return 0;
+  if (!overlap && fact.injectionPolicy !== 'always') return 0;
   const relevance = Math.min(1, overlap / Math.max(1, query.size));
   const scope = fact.scope === 'project' && fact.projectId === options.projectId ? 1 : fact.scope === 'provider' && fact.providerId === options.providerId ? 0.7 : 0.4;
   const freshness = freshnessScore(fact);
   const access = Math.min(1, Math.log2(fact.accessCount + 1) / 8);
-  return relevance * 55 + scope * 15 + fact.importance * 10 + fact.confidence * 8 + (fact.pinned ? 7 : 0) + freshness * 3 + access * 2;
+  const corePreference = fact.injectionPolicy === 'always' ? 28 : 0;
+  return corePreference + relevance * 55 + scope * 15 + fact.importance * 10 + fact.confidence * 8 + (fact.pinned ? 7 : 0) + freshness * 3 + access * 2;
 }
 function freshnessScore(fact: MemoryFactRecord): number {
   if (fact.type === 'profile' || fact.type === 'preference' || fact.type === 'project' || fact.type === 'procedure') return 1;

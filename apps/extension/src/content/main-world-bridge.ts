@@ -26,10 +26,13 @@ export function installMainWorldBridge(defaultProvider: SupportedProvider): () =
   };
 
   window.addEventListener('message', onWindowMessage);
+  // Main-world scripts can start before the content script. Actively request a port
+  // so a late content-script injection does not leave the bridge in a waiting state.
+  window.postMessage({ source: MAIN_WORLD_SOURCE, type: BRIDGE_REQUEST }, window.location.origin);
 
   window.setTimeout(() => {
     if (document.documentElement.getAttribute('data-omniagent-main-world') !== 'ready') return;
-    void browser.runtime.sendMessage({
+    void sendRuntimeMessage({
       type: 'omni:memory-diagnostic',
       payload: {
         stage: 'main-world-loaded',
@@ -54,7 +57,7 @@ export function installMainWorldBridge(defaultProvider: SupportedProvider): () =
 
   async function handleMainWorldMessage(data: MainWorldRequest): Promise<void> {
     if (data?.source === MAIN_WORLD_SOURCE && data.type === 'OMNIAGENT_DIAGNOSTIC') {
-      await browser.runtime.sendMessage({
+      await sendRuntimeMessage({
         type: 'omni:memory-diagnostic',
         payload: { stage: data.stage, detail: data.detail, count: data.count },
       } as unknown as ExtensionMessage);
@@ -64,7 +67,11 @@ export function installMainWorldBridge(defaultProvider: SupportedProvider): () =
     try {
       const prompt = typeof data.prompt === 'string' ? data.prompt : '';
       const provider = data.provider === 'kimi' || data.provider === 'deepseek' ? data.provider : defaultProvider;
-      const result = await browser.runtime.sendMessage<ExtensionMessage<'omni:augment-prompt'>>({
+      void sendRuntimeMessage({
+        type: 'omni:capture-user-memory',
+        payload: { provider, text: prompt, conversationId: conversationIdFromLocation(provider) },
+      } as unknown as ExtensionMessage);
+      const result = await sendRuntimeMessage<ExtensionMessage<'omni:augment-prompt'>>({
         type: 'omni:augment-prompt',
         payload: { provider, prompt },
       }) as { prompt?: string; memoryCount?: number; skillCount?: number } | undefined;
@@ -86,7 +93,7 @@ export function installMainWorldBridge(defaultProvider: SupportedProvider): () =
         memoryCount: 0,
         skillCount: 0,
       });
-      await browser.runtime.sendMessage({
+      await sendRuntimeMessage({
         type: 'omni:memory-diagnostic',
         payload: {
           stage: 'augmentation-error',
@@ -102,4 +109,29 @@ export function installMainWorldBridge(defaultProvider: SupportedProvider): () =
     mainWorldPort?.close();
     mainWorldPort = null;
   };
+}
+
+/** Extension reloads invalidate old content scripts. Treat that state as a no-op until the page reloads. */
+async function sendRuntimeMessage<T = unknown>(message: ExtensionMessage): Promise<T | undefined> {
+  try {
+    const runtime = browser.runtime;
+    if (!runtime?.id) return undefined;
+    return await runtime.sendMessage(message) as T | undefined;
+  } catch (error) {
+    if (isInvalidatedContext(error)) return undefined;
+    throw error;
+  }
+}
+
+function isInvalidatedContext(error: unknown): boolean {
+  return /extension context invalidated|context invalidated/iu.test(error instanceof Error ? error.message : String(error));
+}
+
+function conversationIdFromLocation(provider: SupportedProvider): string | null {
+  const path = window.location.pathname;
+  const match = provider === 'deepseek'
+    ? path.match(/\/(?:a\/)?chat\/s\/([^/?#]+)/u)
+    : path.match(/\/(?:chat|c|s)\/([^/?#]+)/u);
+  if (!match?.[1] || match[1] === 'new') return null;
+  try { return decodeURIComponent(match[1]); } catch { return match[1]; }
 }

@@ -79,6 +79,7 @@ export const useExtensionStore = defineStore('extension', {
     memoryLoading: false,
     memoryError: '',
     memoryMessage: '',
+    memoryNewItemId: '',
     memoryDiagnostic: null as MemoryInjectionDiagnostic | null,
     memoryCandidates: [] as MemoryCandidateRecord[],
     selectedMemoryId: '',
@@ -136,7 +137,7 @@ export const useExtensionStore = defineStore('extension', {
       injectSkills: true,
       injectTools: true,
       injectProject: true,
-      memorySaveMode: 'confirm',
+      memorySaveMode: 'auto',
       browserControlEnabled: false,
     } as RuntimeSettings,
     settingsLoading: false,
@@ -149,6 +150,11 @@ export const useExtensionStore = defineStore('extension', {
       if (this.listening) return;
       this.listening = true;
       browser.runtime.onMessage.addListener((message: ExtensionMessage) => {
+        if (message.type === 'omni:memory-changed') {
+          const payload = message.payload as ExtensionMessageMap['omni:memory-changed'] | undefined;
+          void this.handleAutomaticMemoryChange(payload?.content);
+          return undefined;
+        }
         if (message.type !== 'omni:response-update') return undefined;
         const payload = message.payload as ExtensionMessageMap['omni:response-update'] | undefined;
         if (payload?.role === 'user') this.latestQuestion = payload.text;
@@ -157,6 +163,12 @@ export const useExtensionStore = defineStore('extension', {
         void this.refreshSavedConversations();
         return undefined;
       });
+    },
+    async handleAutomaticMemoryChange(content?: string) {
+      await Promise.all([this.refreshMemories(), this.refreshMemoryCandidates(), this.refreshSessionChunks()]);
+      const newMemory = content ? this.memories.find((memory) => memory.content === content) : undefined;
+      this.memoryNewItemId = newMemory?.id ?? '';
+      this.memoryMessage = newMemory ? `已自动保存：${newMemory.summary}` : '记忆已更新';
     },
     startDiagnosticPolling() {
       if (this.diagnosticPollTimer) return;
