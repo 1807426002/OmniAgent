@@ -66,13 +66,51 @@ export interface MemoryRecord {
   createdAt: number;
   updatedAt: number;
   lastAccessedAt: number | null;
+  artifactId?: string | null;
+  artifactLocator?: MemoryArtifactLocator | null;
 }
 
 export type MemoryFactStatus = 'active' | 'archived' | 'deleted';
 export type MemoryCandidateStatus = 'pending' | 'conflict' | 'rejected' | 'expired';
-export type MemorySourceKind = 'manual' | 'user_message' | 'model_tool' | 'assistant_reply' | 'migration';
+export type MemorySourceKind = 'manual' | 'user_message' | 'model_tool' | 'assistant_reply' | 'file_import' | 'migration';
 export type MemorySensitivity = 'normal' | 'personal' | 'secret';
 export type MemoryInjectionPolicy = 'always' | 'relevant' | 'never';
+export type MemoryArtifactStatus = 'staged' | 'imported' | 'failed';
+
+export interface MemoryArtifactLocator {
+  fileName?: string;
+  page?: number;
+  pageEnd?: number;
+  section?: string;
+  question?: string;
+  label?: string;
+}
+
+/** Metadata and optional staged bytes for a file imported into long-term memory. */
+export interface MemoryArtifactRecord {
+  id: string;
+  contentHash: string;
+  fileName: string;
+  mimeType: string;
+  size: number;
+  providerId: SupportedProvider | null;
+  conversationId: string | null;
+  projectId: string | null;
+  pageSessionId: string | null;
+  status: MemoryArtifactStatus;
+  dataBase64: string | null;
+  error: string | null;
+  importedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type SaveMemoryArtifactInput = Omit<
+  MemoryArtifactRecord,
+  'id' | 'status' | 'dataBase64' | 'error' | 'importedAt' | 'pageSessionId' | 'createdAt' | 'updatedAt'
+> & Partial<Pick<MemoryArtifactRecord, 'status' | 'dataBase64' | 'error' | 'importedAt' | 'pageSessionId'>> & {
+  id?: string;
+};
 
 export interface MemoryFactRecord {
   id: string;
@@ -101,6 +139,8 @@ export interface MemoryFactRecord {
   lastAccessedAt: number | null;
   archivedAt: number | null;
   deletedAt: number | null;
+  artifactId?: string | null;
+  artifactLocator?: MemoryArtifactLocator | null;
 }
 
 export interface MemoryCandidateRecord {
@@ -121,6 +161,9 @@ export interface MemoryCandidateRecord {
   sensitivity: MemorySensitivity;
   sourceKind: MemorySourceKind;
   sourceMessageId: string | null;
+  sourceQuote?: string | null;
+  artifactId?: string | null;
+  artifactLocator?: MemoryArtifactLocator | null;
   reason: string | null;
   status: MemoryCandidateStatus;
   resolvedFactId: string | null;
@@ -137,6 +180,8 @@ export interface MemoryEvidenceRecord {
   excerpt: string;
   valueHash: string;
   createdAt: number;
+  artifactId?: string | null;
+  artifactLocator?: MemoryArtifactLocator | null;
 }
 
 export interface MemoryRevisionRecord {
@@ -247,6 +292,7 @@ export class OmniAgentDatabase extends Dexie {
   memoryMigrationStates!: EntityTable<MemoryMigrationStateRecord, 'key'>;
   memoryRecallLogs!: EntityTable<MemoryRecallLogRecord, 'id'>;
   sessionChunks!: EntityTable<SessionChunkRecord, 'id'>;
+  memoryArtifacts!: EntityTable<MemoryArtifactRecord, 'id'>;
 
   constructor(name = 'omni-agent') {
     super(name);
@@ -337,6 +383,17 @@ export class OmniAgentDatabase extends Dexie {
       memoryCandidates: '&id, &dedupeKey, identityKey, status, sourceKind, sourceMessageId, createdAt',
       memoryEvidence: '&id, factId, sourceMessageId, createdAt', memoryRevisions: '&id, factId, createdAt', memoryMigrationStates: '&key, updatedAt',
       memoryRecallLogs: '&id, createdAt', sessionChunks: '&id, &sourceKey, conversationId, providerId, projectId, endedAt, *keywords',
+    });
+    this.version(11).stores({
+      providers: '&id, adapter, updatedAt', conversations: '&id, providerId, externalId, [providerId+externalId], updatedAt',
+      messages: '&id, conversationId, externalId, role, [conversationId+externalId], [conversationId+createdAt], updatedAt', settings: '&key, updatedAt',
+      memories: '&id, type, scope, providerId, projectId, pinned, *keywords, updatedAt', skills: '&id, name, enabled, source, updatedAt',
+      agentTasks: '&id, status, providerId, conversationId, projectId, updatedAt', projects: '&id, name, status, updatedAt',
+      memoryFacts: '&id, &identityKey, canonicalKey, type, scope, scopeKey, providerId, projectId, artifactId, status, pinned, *keywords, updatedAt',
+      memoryCandidates: '&id, &dedupeKey, identityKey, status, sourceKind, sourceMessageId, createdAt',
+      memoryEvidence: '&id, factId, sourceMessageId, artifactId, createdAt', memoryRevisions: '&id, factId, createdAt', memoryMigrationStates: '&key, updatedAt',
+      memoryRecallLogs: '&id, createdAt', sessionChunks: '&id, &sourceKey, conversationId, providerId, projectId, endedAt, *keywords',
+      memoryArtifacts: '&id, &contentHash, status, fileName, mimeType, providerId, conversationId, projectId, pageSessionId, updatedAt',
     });
   }
 }
@@ -447,16 +504,17 @@ export class OmniAgentStorage {
   }
 
   async deleteConversation(id: string): Promise<void> {
-    await this.db.transaction('rw', this.db.conversations, this.db.messages, this.db.sessionChunks, async () => {
+    await this.db.transaction('rw', this.db.conversations, this.db.messages, this.db.sessionChunks, this.db.memoryArtifacts, async () => {
       await this.db.messages.where('conversationId').equals(id).delete();
       await this.db.sessionChunks.where('conversationId').equals(id).delete();
+      await this.db.memoryArtifacts.where('conversationId').equals(id).modify({ conversationId: null, updatedAt: Date.now() });
       await this.db.conversations.delete(id);
     });
   }
 
   async mergeConversations(sourceId: string, targetId: string): Promise<void> {
     if (sourceId === targetId) return;
-    await this.db.transaction('rw', this.db.conversations, this.db.messages, this.db.sessionChunks, async () => {
+    await this.db.transaction('rw', this.db.conversations, this.db.messages, this.db.sessionChunks, this.db.memoryArtifacts, async () => {
       const source = await this.db.conversations.get(sourceId);
       const target = await this.db.conversations.get(targetId);
       if (!source || !target) return;
@@ -464,6 +522,7 @@ export class OmniAgentStorage {
       await this.db.messages.bulkPut(messages.map((message) => ({ ...message, conversationId: targetId, updatedAt: Date.now() })));
       const chunks = await this.db.sessionChunks.where('conversationId').equals(sourceId).toArray();
       await this.db.sessionChunks.bulkPut(chunks.map((chunk) => ({ ...chunk, conversationId: targetId, sourceKey: chunk.sourceKey.replace(sourceId, targetId), updatedAt: Date.now() })));
+      await this.db.memoryArtifacts.where('conversationId').equals(sourceId).modify({ conversationId: targetId, updatedAt: Date.now() });
       await this.db.conversations.put({ ...target, title: target.title ?? source.title, projectId: target.projectId ?? source.projectId, updatedAt: Date.now() });
       await this.db.conversations.delete(sourceId);
     });
@@ -513,15 +572,85 @@ export class OmniAgentStorage {
 
   async clearMemories(): Promise<number> {
     const count = (await this.db.memories.count()) + (await this.db.memoryFacts.count());
-    await this.db.transaction('rw', this.db.memories, this.db.memoryFacts, this.db.memoryCandidates, this.db.memoryEvidence, this.db.memoryRevisions, async () => {
+    await this.db.transaction('rw', [
+      this.db.memories,
+      this.db.memoryFacts,
+      this.db.memoryCandidates,
+      this.db.memoryEvidence,
+      this.db.memoryRevisions,
+      this.db.memoryArtifacts,
+    ], async () => {
       await this.db.memories.clear();
       await this.db.memoryFacts.clear();
       await this.db.memoryCandidates.clear();
       await this.db.memoryEvidence.clear();
       await this.db.memoryRevisions.clear();
+      await this.db.memoryArtifacts.clear();
     });
     await this.db.memoryRecallLogs.clear();
     return count;
+  }
+
+  /**
+   * Saves staged/imported file metadata. The content hash is the dedupe identity:
+   * saving the same bytes again updates the original artifact and preserves its id.
+   */
+  async saveMemoryArtifact(input: SaveMemoryArtifactInput): Promise<MemoryArtifactRecord> {
+    const contentHash = input.contentHash.trim();
+    if (!contentHash) throw new TypeError('Memory artifact contentHash must not be empty.');
+
+    return this.db.transaction('rw', this.db.memoryArtifacts, async () => {
+      const hashMatch = await this.db.memoryArtifacts.where('contentHash').equals(contentHash).first();
+      const idMatch = !hashMatch && input.id ? await this.db.memoryArtifacts.get(input.id) : undefined;
+      const existing = hashMatch ?? idMatch;
+      const now = Date.now();
+      const artifact: MemoryArtifactRecord = {
+        ...existing,
+        ...input,
+        id: existing?.id ?? input.id ?? createId(),
+        contentHash,
+        status: input.status ?? existing?.status ?? 'staged',
+        pageSessionId: input.pageSessionId !== undefined ? input.pageSessionId : (existing?.pageSessionId ?? null),
+        dataBase64: input.dataBase64 !== undefined ? input.dataBase64 : (existing?.dataBase64 ?? null),
+        error: input.error !== undefined ? input.error : (existing?.error ?? null),
+        importedAt: input.importedAt !== undefined ? input.importedAt : (existing?.importedAt ?? null),
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      };
+      await this.db.memoryArtifacts.put(artifact);
+      return artifact;
+    });
+  }
+
+  async getMemoryArtifact(id: string): Promise<MemoryArtifactRecord | undefined> {
+    return this.db.memoryArtifacts.get(id);
+  }
+
+  async getMemoryArtifactByHash(contentHash: string): Promise<MemoryArtifactRecord | undefined> {
+    const normalized = contentHash.trim();
+    if (!normalized) return undefined;
+    return this.db.memoryArtifacts.where('contentHash').equals(normalized).first();
+  }
+
+  async listMemoryArtifacts(options: {
+    status?: MemoryArtifactStatus;
+    providerId?: SupportedProvider | null;
+    conversationId?: string | null;
+    projectId?: string | null;
+    pageSessionId?: string | null;
+  } = {}): Promise<MemoryArtifactRecord[]> {
+    let rows = options.status
+      ? await this.db.memoryArtifacts.where('status').equals(options.status).toArray()
+      : await this.db.memoryArtifacts.toArray();
+    if ('providerId' in options) rows = rows.filter((row) => row.providerId === options.providerId);
+    if ('conversationId' in options) rows = rows.filter((row) => row.conversationId === options.conversationId);
+    if ('projectId' in options) rows = rows.filter((row) => row.projectId === options.projectId);
+    if ('pageSessionId' in options) rows = rows.filter((row) => row.pageSessionId === options.pageSessionId);
+    return rows.sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  async deleteMemoryArtifact(id: string): Promise<void> {
+    await this.db.memoryArtifacts.delete(id);
   }
 
   async listMemoryFacts(options: { status?: MemoryFactStatus; projectId?: string | null; type?: MemoryType } = {}): Promise<MemoryFactRecord[]> {

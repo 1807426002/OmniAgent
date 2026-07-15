@@ -16,10 +16,35 @@ export interface ToolContext {
   services: ToolServices;
 }
 
+export const MEMORY_SAVE_TYPES = [
+  'knowledge',
+  'preference',
+  'profile',
+  'project',
+  'episode',
+  'procedure',
+] as const;
+
+export type MemorySaveType = (typeof MEMORY_SAVE_TYPES)[number];
+
+/**
+ * A curated memory derived from one or more messages in the active
+ * conversation. Quotes are verbatim evidence; message ids identify the
+ * conversation records against which the memory service validates them.
+ */
+export interface MemorySaveBatchItem {
+  content: string;
+  type?: MemorySaveType;
+  importance?: number;
+  sourceQuotes: string[];
+  sourceMessageIds: string[];
+}
+
 export interface ToolServices {
   memory?: {
     search(query: string, options?: { providerId?: string; projectId?: string; limit?: number }): Promise<unknown[]>;
     save(input: { content: string; type?: string; importance?: number }): Promise<unknown>;
+    saveBatch(items: MemorySaveBatchItem[]): Promise<unknown>;
   };
   browser?: BrowserToolService;
 }

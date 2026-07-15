@@ -3,14 +3,19 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
-    "test": "tsx --test test/memory.test.ts",
+    "test": "tsx --test test/memory.test.ts test/file-memory.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@omni-agent/shared": "workspace:*",
-    "@omni-agent/storage": "workspace:*"
+    "@omni-agent/storage": "workspace:*",
+    "fast-xml-parser": "^5.10.0",
+    "jszip": "^3.10.1",
+    "pdfjs-dist": "^6.1.200"
   },
   "devDependencies": {
     "fake-indexeddb": "^6.2.5",

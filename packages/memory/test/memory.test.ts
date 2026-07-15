@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { OmniAgentDatabase, OmniAgentStorage } from '@omni-agent/storage';
-import { MemoryService } from '../src/index.js';
+import { MemoryService, splitMemoryAtSemanticBoundaries } from '../src/index.js';
 
 if (typeof globalThis.CustomEvent === 'undefined') {
   globalThis.CustomEvent = class CustomEvent<T = unknown> extends Event {
@@ -55,6 +55,17 @@ test('automatic explicit user memory follows review policy and cannot enter reca
   const accepted = await memory.acceptCandidate(proposal.candidate!.id);
   assert.equal(accepted.status, 'created');
   assert.equal((await memory.retrieve('请简洁回答')).length, 1);
+});
+
+test('an explicitly requested model memory save writes directly in auto-safe mode', async (t) => {
+  const { memory } = createMemory(t);
+  const outcome = await memory.propose({
+    type: 'profile', content: '朋友小白有一条狗叫小黑', sourceKind: 'model_tool',
+    policy: 'auto_safe', explicitUserIntent: true, confidence: 1,
+  });
+  assert.equal(outcome.status, 'created');
+  assert.equal((await memory.listCandidates('pending')).length, 0);
+  assert.equal((await memory.retrieve('小白的狗叫什么')).length, 1);
 });
 
 test('automatically saves durable user profile statements under the safe policy', async (t) => {
@@ -151,4 +162,92 @@ test('legacy migration is incremental and retains old rows', async (t) => {
   assert.equal((await memory.list()).length, 1);
   await memory.migrateLegacy(100);
   assert.equal((await storage.listMemoryFacts({ status: 'active' }))[0]?.sourceCount, 2);
+});
+
+test('expires unconfirmed candidates and archives stale low-retention facts without deleting them', async (t) => {
+  const storage = new OmniAgentStorage(new OmniAgentDatabase(`omni-agent-memory-test-${randomUUID()}`));
+  t.after(() => storage.db.delete());
+  let now = Date.now();
+  const memory = new MemoryService(storage, () => now);
+
+  const candidate = await memory.propose({
+    type: 'knowledge', content: '待确认的临时信息', sourceKind: 'model_tool', policy: 'auto_safe', confidence: 1,
+  });
+  const episode = await memory.save({ type: 'episode', content: '本次会议决定周五发布', importance: 1, confidence: 1 });
+  const knowledge = await memory.save({ type: 'knowledge', content: '低权重旧知识', importance: 0.1, confidence: 0.1 });
+
+  now += 181 * 24 * 60 * 60 * 1000;
+  const maintenance = await memory.maintainLifecycle();
+
+  assert.equal(maintenance.expiredCandidates, 1);
+  assert.equal(maintenance.archivedFacts, 2);
+  assert.equal((await storage.getMemoryCandidate(candidate.candidate!.id))?.status, 'expired');
+  assert.equal((await storage.db.memoryFacts.get(episode.id))?.status, 'archived');
+  assert.equal((await storage.db.memoryFacts.get(knowledge.id))?.status, 'archived');
+  assert.equal((await memory.retrieve('发布 临时 旧知识')).length, 0);
+});
+
+test('splits long content only at semantic boundaries near the target size', () => {
+  const questionOne = `1. 第一题题干\n答案：A\n解析：${'第一题说明。'.repeat(90)}`;
+  const questionTwo = `2. 第二题题干\n答案：B\n解析：${'第二题说明。'.repeat(90)}`;
+  const chunks = splitMemoryAtSemanticBoundaries(`${questionOne}\n\n${questionTwo}`, 800);
+  assert.equal(chunks.length, 2);
+  assert.equal(chunks[0], questionOne);
+  assert.equal(chunks[1], questionTwo);
+  assert.ok(chunks.every((chunk) => chunk.includes('答案：')));
+});
+
+test('preserves file provenance and injects the complete semantic chunk', async (t) => {
+  const { storage, memory } = createMemory(t);
+  const artifact = await storage.saveMemoryArtifact({
+    contentHash: 'hash-file-1',
+    fileName: '考试题库.txt',
+    mimeType: 'text/plain',
+    size: 900,
+    providerId: 'deepseek',
+    conversationId: 'conversation-1',
+    projectId: null,
+    pageSessionId: 'page-1',
+    status: 'imported',
+  });
+  const content = `第 21 题：境外活动保密事项有哪些？\n选项：ABCD\n答案：ABCD\n${'完整解析内容。'.repeat(40)}`;
+  const outcome = await memory.propose({
+    type: 'knowledge',
+    content,
+    sourceKind: 'file_import',
+    artifactId: artifact.id,
+    artifactLocator: { fileName: artifact.fileName, page: 3, question: '第 21 题', label: '考试题库.txt · 第 3 页 · 第 21 题' },
+    policy: 'auto_safe',
+    explicitUserIntent: true,
+    confidence: 1,
+  });
+
+  assert.equal(outcome.status, 'created');
+  const matches = await memory.retrieve('境外活动 保密 21题');
+  const context = memory.formatContext(matches);
+  assert.match(context, /完整解析内容/u);
+  assert.match(context, /考试题库\.txt/u);
+  assert.equal(matches[0]?.memory.content, content);
+  const evidence = await storage.listMemoryEvidence(outcome.fact!.id);
+  assert.equal(evidence[0]?.artifactId, artifact.id);
+  assert.equal(evidence[0]?.artifactLocator?.question, '第 21 题');
+});
+
+test('keeps the verified quote when a chat candidate is accepted', async (t) => {
+  const { storage, memory } = createMemory(t);
+  const outcome = await memory.propose({
+    type: 'profile',
+    content: '小白有一条狗叫小黑',
+    sourceKind: 'model_tool',
+    sourceMessageId: 'message-1',
+    sourceQuote: '我的朋友小白有一条狗叫小黑',
+    policy: 'review_all',
+    explicitUserIntent: false,
+    confidence: 1,
+  });
+  assert.equal(outcome.status, 'pending_confirmation');
+  const accepted = await memory.acceptCandidate(outcome.candidate!.id);
+  const evidence = await storage.listMemoryEvidence(accepted.fact!.id);
+  assert.equal(evidence[0]?.sourceMessageId, 'message-1');
+  assert.equal(evidence[0]?.excerpt, '我的朋友小白有一条狗叫小黑');
 });

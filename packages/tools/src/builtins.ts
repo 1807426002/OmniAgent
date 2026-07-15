@@ -1,4 +1,9 @@
-import type { ToolDefinition } from './types.js';
+import {
+  MEMORY_SAVE_TYPES,
+  type MemorySaveBatchItem,
+  type MemorySaveType,
+  type ToolDefinition,
+} from './types.js';
 
 export const memorySearchTool: ToolDefinition = {
   name: 'memory.search',
@@ -43,6 +48,131 @@ export const memorySaveTool: ToolDefinition = {
     });
   },
 };
+
+export const memorySaveBatchTool: ToolDefinition = {
+  name: 'memory.save_batch',
+  description: 'Save a user-approved batch of curated long-term memories in one operation. Every item must contain content, exact sourceQuotes copied from the current conversation, and their sourceMessageIds; type and importance (0-1) are optional.',
+  source: 'builtin',
+  permissions: ['memory.write'],
+  parameters: [
+    {
+      name: 'items',
+      type: 'array',
+      description: 'Memory items: [{content, type?, importance?, sourceQuotes, sourceMessageIds}]. sourceQuotes and sourceMessageIds must be non-empty arrays of strings.',
+      required: true,
+    },
+  ],
+  async execute(input, context) {
+    if (!context.services.memory) throw new Error('Memory service is unavailable');
+    if (!Array.isArray(input.items) || !input.items.length) throw new Error('items must be a non-empty array');
+    const items: MemorySaveBatchItem[] = [];
+    const originalIndexes: number[] = [];
+    const schemaRejections: BatchToolItemResult[] = [];
+    for (const [index, item] of input.items.entries()) {
+      try {
+        items.push(readBatchItem(item, index));
+        originalIndexes.push(index);
+      } catch (error) {
+        schemaRejections.push({
+          itemIndex: index,
+          chunkIndex: null,
+          status: 'rejected_schema',
+          factId: null,
+          candidateId: null,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    const serviceResult = items.length
+      ? await context.services.memory.saveBatch(items)
+      : { saved: 0, candidates: 0, rejected: 0, items: [] };
+    return mergeBatchToolResult(serviceResult, originalIndexes, schemaRejections);
+  },
+};
+
+interface BatchToolItemResult {
+  itemIndex: number;
+  chunkIndex: number | null;
+  status: string;
+  factId: string | null;
+  candidateId: string | null;
+  reason?: string;
+}
+
+function readBatchItem(item: unknown, index: number): MemorySaveBatchItem {
+  const label = `items[${index}]`;
+  if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error(`${label} must be an object`);
+  const value = item as Record<string, unknown>;
+  if (typeof value.content !== 'string' || !value.content.trim()) throw new Error(`${label}.content must be a non-empty string`);
+  if (value.type !== undefined && !isMemorySaveType(value.type)) {
+    throw new Error(`${label}.type must be one of: ${MEMORY_SAVE_TYPES.join(', ')}`);
+  }
+  if (value.importance !== undefined && (
+    typeof value.importance !== 'number'
+    || !Number.isFinite(value.importance)
+    || value.importance < 0
+    || value.importance > 1
+  )) {
+    throw new Error(`${label}.importance must be a finite number between 0 and 1`);
+  }
+  return {
+    content: value.content.trim(),
+    type: value.type as MemorySaveType | undefined,
+    importance: typeof value.importance === 'number' ? value.importance : undefined,
+    sourceQuotes: readEvidenceList(value.sourceQuotes, `${label}.sourceQuotes`),
+    sourceMessageIds: readEvidenceList(value.sourceMessageIds, `${label}.sourceMessageIds`),
+  };
+}
+
+function mergeBatchToolResult(
+  value: unknown,
+  originalIndexes: number[],
+  schemaRejections: BatchToolItemResult[],
+): { saved: number; candidates: number; rejected: number; items: BatchToolItemResult[] } {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+  const serviceItems = Array.isArray(record?.items)
+    ? record.items.map((item, fallbackIndex): BatchToolItemResult => {
+      const source = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+      const serviceIndex = typeof source.itemIndex === 'number' ? source.itemIndex : fallbackIndex;
+      return {
+        itemIndex: originalIndexes[serviceIndex] ?? serviceIndex,
+        chunkIndex: typeof source.chunkIndex === 'number' ? source.chunkIndex : null,
+        status: typeof source.status === 'string' ? source.status : 'processed',
+        factId: typeof source.factId === 'string' ? source.factId : null,
+        candidateId: typeof source.candidateId === 'string' ? source.candidateId : null,
+        reason: typeof source.reason === 'string' ? source.reason : undefined,
+      };
+    })
+    : originalIndexes.map((itemIndex) => ({
+      itemIndex,
+      chunkIndex: null,
+      status: 'processed',
+      factId: null,
+      candidateId: null,
+    }));
+  const result = {
+    saved: typeof record?.saved === 'number' ? record.saved : originalIndexes.length,
+    candidates: typeof record?.candidates === 'number' ? record.candidates : 0,
+    rejected: (typeof record?.rejected === 'number' ? record.rejected : 0) + schemaRejections.length,
+    items: [...serviceItems, ...schemaRejections].sort((left, right) => left.itemIndex - right.itemIndex),
+  };
+  return result;
+}
+
+function isMemorySaveType(value: unknown): value is MemorySaveType {
+  return typeof value === 'string' && (MEMORY_SAVE_TYPES as readonly string[]).includes(value);
+}
+
+function readEvidenceList(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || !value.length) throw new Error(`${label} must be a non-empty array of strings`);
+  const normalized = value.map((entry) => {
+    if (typeof entry !== 'string' || !entry.trim()) throw new Error(`${label} must contain only non-empty strings`);
+    return entry.trim();
+  });
+  return [...new Set(normalized)];
+}
 
 export const browserSnapshotTool: ToolDefinition = {
   name: 'browser.snapshot',
@@ -158,6 +288,7 @@ export const browserNavigateTool: ToolDefinition = {
 export const builtinTools: readonly ToolDefinition[] = [
   memorySearchTool,
   memorySaveTool,
+  memorySaveBatchTool,
   browserSnapshotTool,
   browserClickTool,
   browserTypeTool,

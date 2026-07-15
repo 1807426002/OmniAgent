@@ -21,6 +21,7 @@ export default defineContentScript({
       extractPrompt: extractKimiPrompt,
       applyPrompt: applyKimiPrompt,
       rewriteProtobufPrompt: true,
+      timeoutMs: 10_000,
     });
   },
 });

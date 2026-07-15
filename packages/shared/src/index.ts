@@ -134,7 +134,17 @@ export interface ExtensionMessageMap {
     memorySaveMode?: 'auto' | 'confirm' | 'off';
     browserControlEnabled?: boolean;
   };
-  'omni:augment-prompt': { provider: SupportedProvider; prompt: string };
+  'omni:augment-prompt': { provider: SupportedProvider; prompt: string; pageSessionId?: string; conversationId?: string | null };
+  'omni:stage-memory-artifact': {
+    provider: SupportedProvider;
+    pageSessionId: string;
+    conversationId?: string | null;
+    fileName: string;
+    mimeType: string;
+    size: number;
+    contentHash: string;
+    dataBase64: string;
+  };
   'omni:insert-prompt': { message: string };
   'omni:send-message': { message: string };
   'omni:response-update': {

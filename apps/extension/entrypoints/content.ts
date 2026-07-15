@@ -2,6 +2,7 @@ import { BrowserPageController } from '@omni-agent/browser-agent';
 import { createAdapterRegistry, deepseekAdapter, providerFromAdapter } from '@omni-agent/site-adapters';
 import type { AdapterStatus, ExtensionMessage, ExtensionMessageMap } from '@omni-agent/shared';
 import { installMainWorldBridge } from '../src/content/main-world-bridge';
+import { installMemoryFileStaging } from '../src/content/file-staging';
 
 const adapters = createAdapterRegistry([deepseekAdapter]);
 const pageController = new BrowserPageController();
@@ -10,9 +11,10 @@ export default defineContentScript({
   matches: ['*://chat.deepseek.com/*'],
   runAt: 'document_start',
   main(ctx) {
-    const disposeBridge = installMainWorldBridge('deepseek');
-    const adapter = adapters.find(window.location.href);
     const pageSessionId = globalThis.crypto?.randomUUID?.() ?? `page-${Date.now().toString(36)}`;
+    const disposeBridge = installMainWorldBridge('deepseek', pageSessionId);
+    const adapter = adapters.find(window.location.href);
+    const disposeFileStaging = installMemoryFileStaging('deepseek', pageSessionId, () => adapter?.getConversationId() ?? null);
     const hideInternalProtocolMessages = () => adapter?.hideInternalProtocolMessages();
     hideInternalProtocolMessages();
     const internalMessageObserver = new MutationObserver(hideInternalProtocolMessages);
@@ -56,7 +58,7 @@ export default defineContentScript({
     browser.runtime.onMessage.addListener(handleMessage);
 
     let runtimeUnavailable = false;
-    const sendUpdate = (payload: ExtensionMessageMap['omni:response-update']) => {
+    const sendUpdate = (payload: ExtensionMessageMap['omni:response-update'], attempt = 0) => {
       if (runtimeUnavailable) return;
       try {
         // Accessing ctx.isValid can itself touch a revoked runtime proxy after an
@@ -70,15 +72,21 @@ export default defineContentScript({
           type: 'omni:response-update',
           payload,
         }).catch((error) => {
-          if (/extension context invalidated|context invalidated/iu.test(error instanceof Error ? error.message : String(error))) {
+          const detail = error instanceof Error ? error.message : String(error);
+          if (/extension context invalidated|context invalidated/iu.test(detail)) {
             runtimeUnavailable = true;
+          } else if (/could not establish connection|receiving end does not exist/iu.test(detail) && attempt < 3) {
+            window.setTimeout(() => sendUpdate(payload, attempt + 1), 250 * (attempt + 1));
           } else {
             console.warn('[OmniAgent] response observer unavailable', error);
           }
         });
       } catch (error) {
-        if (/extension context invalidated|context invalidated/iu.test(error instanceof Error ? error.message : String(error))) {
+        const detail = error instanceof Error ? error.message : String(error);
+        if (/extension context invalidated|context invalidated/iu.test(detail)) {
           runtimeUnavailable = true;
+        } else if (/could not establish connection|receiving end does not exist/iu.test(detail) && attempt < 3) {
+          window.setTimeout(() => sendUpdate(payload, attempt + 1), 250 * (attempt + 1));
         } else {
           console.warn('[OmniAgent] response observer unavailable', error);
         }
@@ -97,6 +105,7 @@ export default defineContentScript({
       stopMessages?.();
       stopResponses?.();
       internalMessageObserver.disconnect();
+      disposeFileStaging();
       disposeBridge();
     });
 

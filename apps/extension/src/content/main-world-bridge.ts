@@ -1,4 +1,5 @@
 import type { ExtensionMessage, SupportedProvider } from '@omni-agent/shared';
+import { waitForPendingMemoryFileStaging } from './file-staging';
 
 const MAIN_WORLD_SOURCE = 'omniagent-main-world';
 const CONTENT_SOURCE = 'omniagent-content';
@@ -16,7 +17,7 @@ type MainWorldRequest = {
   count?: number;
 };
 
-export function installMainWorldBridge(defaultProvider: SupportedProvider): () => void {
+export function installMainWorldBridge(defaultProvider: SupportedProvider, pageSessionId?: string): () => void {
   let mainWorldPort: MessagePort | null = null;
 
   const onWindowMessage = (event: MessageEvent) => {
@@ -67,13 +68,12 @@ export function installMainWorldBridge(defaultProvider: SupportedProvider): () =
     try {
       const prompt = typeof data.prompt === 'string' ? data.prompt : '';
       const provider = data.provider === 'kimi' || data.provider === 'deepseek' ? data.provider : defaultProvider;
-      void sendRuntimeMessage({
-        type: 'omni:capture-user-memory',
-        payload: { provider, text: prompt, conversationId: conversationIdFromLocation(provider) },
-      } as unknown as ExtensionMessage);
+      // A user can choose a file and immediately press Send. Ensure its bytes
+      // and hash reach the background before the prompt is classified.
+      await waitForPendingMemoryFileStaging();
       const result = await sendRuntimeMessage<ExtensionMessage<'omni:augment-prompt'>>({
         type: 'omni:augment-prompt',
-        payload: { provider, prompt },
+        payload: { provider, prompt, pageSessionId, conversationId: conversationIdFromLocation(provider) },
       }) as { prompt?: string; memoryCount?: number; skillCount?: number } | undefined;
       mainWorldPort?.postMessage({
         source: CONTENT_SOURCE,

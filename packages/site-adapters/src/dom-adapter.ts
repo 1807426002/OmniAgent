@@ -28,11 +28,19 @@ export class DomSiteAdapter implements SiteAdapter {
   }
 
   async sendMessage(message: string): Promise<void> {
-    await this.insertPrompt(message);
-
-    const submit = await this.waitForEnabledSubmit();
-    if (!submit) throw new Error(`${this.id}: send button was not found or did not become enabled`);
-    submit.click();
+    const input = this.findElement<HTMLElement>(this.options.inputSelectors);
+    if (!input) throw new Error(`${this.id}: message input was not found`);
+    try {
+      await this.insertPrompt(message);
+      const submit = await this.waitForEnabledSubmit(input);
+      if (!submit) throw new Error(`${this.id}: send button was not found or did not become enabled`);
+      submit.click();
+    } catch (error) {
+      // Internal protocol messages are transport only. Never leave one exposed
+      // in the provider composer when a site changes its send-button DOM.
+      this.clearInternalPrompt(input, message);
+      throw error;
+    }
   }
 
   async insertPrompt(message: string): Promise<void> {
@@ -153,13 +161,44 @@ export class DomSiteAdapter implements SiteAdapter {
     return null;
   }
 
-  private async waitForEnabledSubmit(): Promise<HTMLButtonElement | null> {
+  private async waitForEnabledSubmit(input: HTMLElement): Promise<HTMLElement | null> {
     const deadline = Date.now() + 1_000;
     while (Date.now() < deadline) {
-      const submit = this.findElement<HTMLButtonElement>(this.options.submitSelectors);
-      if (submit && !submit.disabled) return submit;
+      const submit = this.findSubmitNearInput(input) ?? this.findElement<HTMLElement>(this.options.submitSelectors);
+      if (submit && !isDisabled(submit)) return submit;
       await new Promise<void>((resolve) => window.setTimeout(resolve, 16));
     }
     return null;
   }
+
+  private findSubmitNearInput(input: HTMLElement): HTMLElement | null {
+    const selectors = [...this.options.submitSelectors, '[role="button"][aria-label*="发送"]', '[role="button"][aria-label*="Send"]', '[role="button"][class*="send"]', '[role="button"][class*="submit"]'];
+    let container: HTMLElement | null = input;
+    for (let depth = 0; container && depth < 6; depth += 1, container = container.parentElement) {
+      for (const selector of selectors) {
+        const submit = container.querySelector<HTMLElement>(selector);
+        if (submit) return submit;
+      }
+    }
+    return null;
+  }
+
+  private clearInternalPrompt(input: HTMLElement, message: string): void {
+    const current = input instanceof HTMLTextAreaElement || input instanceof HTMLInputElement ? input.value : input.textContent ?? '';
+    if (current !== message || !/<omniagent-(?:action|tool-result)\b/iu.test(message)) return;
+    if (input instanceof HTMLTextAreaElement || input instanceof HTMLInputElement) {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+      setter?.call(input, '');
+    } else {
+      input.textContent = '';
+    }
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward', data: null }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+}
+
+function isDisabled(element: HTMLElement): boolean {
+  return element instanceof HTMLButtonElement
+    ? element.disabled
+    : element.getAttribute('aria-disabled') === 'true' || element.hasAttribute('disabled');
 }

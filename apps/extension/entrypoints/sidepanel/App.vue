@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import type { ToolResult } from '@omni-agent/tools';
+import type { MemoryArtifactLocator } from '@omni-agent/storage';
 import { useExtensionStore } from '../../src/stores/extension';
 
 const extension = useExtensionStore();
@@ -82,6 +83,15 @@ function candidateLabel(candidate: { status: string; canonicalKey: string }): st
 function candidateReason(candidate: { status: string; reason?: string | null }): string {
   if (candidate.status === 'conflict') return '确认后将用下方内容更新该记忆；忽略则保留原内容。';
   return candidate.reason || '请确认这是否是你希望长期保留的信息。';
+}
+
+function formatArtifactLocation(locator?: MemoryArtifactLocator | null): string {
+  if (!locator) return '';
+  const pages = locator.page
+    ? `第 ${locator.page}${locator.pageEnd && locator.pageEnd !== locator.page ? `–${locator.pageEnd}` : ''} 页`
+    : '';
+  const structured = [pages, locator.section, locator.question].filter(Boolean).join(' · ');
+  return structured || locator.label || '';
 }
 const panelTitles: Record<Exclude<PanelId, 'overview'>, string> = {
   conversations: '本地会话',
@@ -311,7 +321,9 @@ onUnmounted(() => {
                 <p class="skill-triggers">置信度 {{ Math.round(memory.confidence * 100) }}% · 重要度 {{ Math.round(memory.importance * 100) }}%</p>
                 <template v-if="extension.selectedMemoryDetail?.fact.id === memory.id">
                   <p class="skill-triggers">来源证据 {{ extension.selectedMemoryDetail.fact.sourceCount }} 条 · 修订 {{ extension.selectedMemoryDetail.revisions.length }} 次</p>
-                  <p v-if="extension.selectedMemoryDetail.evidence[0]" class="skill-triggers">最近依据：{{ extension.selectedMemoryDetail.evidence[0].excerpt }}</p>
+                  <p v-if="extension.selectedMemoryDetail.artifact" class="skill-triggers">来源文件：{{ extension.selectedMemoryDetail.artifact.fileName }}</p>
+                  <p v-if="formatArtifactLocation(extension.selectedMemoryDetail.fact.artifactLocator)" class="skill-triggers">文件定位：{{ formatArtifactLocation(extension.selectedMemoryDetail.fact.artifactLocator) }}</p>
+                  <p v-if="extension.selectedMemoryDetail.evidence[0]" class="skill-triggers">原文依据：{{ extension.selectedMemoryDetail.evidence[0].excerpt }}</p>
                 </template>
               </div>
             </template>

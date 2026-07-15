@@ -2,7 +2,10 @@ import 'fake-indexeddb/auto';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
+import DexieModule, { type DexieConstructor } from 'dexie/dist/dexie.js';
 import { OmniAgentDatabase, OmniAgentStorage } from '../src/index.js';
+
+const Dexie = DexieModule as unknown as DexieConstructor;
 
 if (typeof globalThis.CustomEvent === 'undefined') {
   globalThis.CustomEvent = class CustomEvent<T = unknown> extends Event {
@@ -168,4 +171,139 @@ test('keeps local session chunks with their conversation lifecycle', async (t) =
   assert.equal((await storage.searchSessionChunks('pnpm')).length, 1);
   await storage.deleteConversation(conversation.id);
   assert.equal((await storage.listSessionChunks({ conversationId: conversation.id })).length, 0);
+});
+
+test('deduplicates file artifacts by hash and keeps fact provenance', async (t) => {
+  const storage = createStorage();
+  t.after(() => storage.db.delete());
+
+  const staged = await storage.saveMemoryArtifact({
+    contentHash: 'sha256:exam-document',
+    fileName: '地理信息安全考试.docx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    size: 4096,
+    providerId: 'deepseek',
+    conversationId: 'conversation-1',
+    projectId: null,
+    status: 'staged',
+    dataBase64: 'AAECAw==',
+  });
+  const imported = await storage.saveMemoryArtifact({
+    contentHash: staged.contentHash,
+    fileName: staged.fileName,
+    mimeType: staged.mimeType,
+    size: staged.size,
+    providerId: staged.providerId,
+    conversationId: staged.conversationId,
+    projectId: staged.projectId,
+    status: 'imported',
+    dataBase64: null,
+    error: null,
+    importedAt: 1234,
+  });
+
+  assert.equal(imported.id, staged.id);
+  assert.equal(imported.createdAt, staged.createdAt);
+  assert.equal(imported.status, 'imported');
+  assert.equal(imported.dataBase64, null);
+  assert.equal(imported.importedAt, 1234);
+  assert.equal(await storage.db.memoryArtifacts.count(), 1);
+  assert.equal((await storage.getMemoryArtifactByHash(staged.contentHash))?.id, staged.id);
+  assert.equal((await storage.listMemoryArtifacts({ status: 'imported', providerId: 'deepseek' })).length, 1);
+  assert.equal((await storage.listMemoryArtifacts({ projectId: null })).length, 1);
+
+  const now = Date.now();
+  await storage.saveMemoryFact({
+    id: 'fact-with-artifact',
+    identityKey: 'global:knowledge:exam-21',
+    canonicalKey: 'exam-21',
+    type: 'knowledge',
+    scope: 'global',
+    scopeKey: 'global',
+    providerId: null,
+    projectId: null,
+    value: '第 21 题答案是 ABCD。',
+    normalizedValue: '第 21 题答案是 abcd。',
+    valueHash: 'fact-value-hash',
+    summary: '第 21 题答案',
+    keywords: ['21', 'ABCD'],
+    status: 'active',
+    sensitivity: 'normal',
+    injectionPolicy: 'relevant',
+    importance: 0.8,
+    confidence: 0.95,
+    pinned: false,
+    sourceCount: 1,
+    accessCount: 0,
+    createdAt: now,
+    updatedAt: now,
+    lastAccessedAt: null,
+    archivedAt: null,
+    deletedAt: null,
+    artifactId: staged.id,
+    artifactLocator: { page: 3, section: '必对题', question: '21' },
+  });
+  await storage.saveMemoryEvidence({
+    id: 'evidence-with-artifact',
+    factId: 'fact-with-artifact',
+    sourceKind: 'file_import',
+    sourceMessageId: null,
+    excerpt: '21. 在境外活动要注意的保密事项……答案：ABCD',
+    valueHash: 'fact-value-hash',
+    createdAt: now,
+    artifactId: staged.id,
+    artifactLocator: { page: 3, question: '21' },
+  });
+
+  const detail = await storage.getMemoryFactDetail('fact-with-artifact');
+  assert.equal(detail?.fact.artifactId, staged.id);
+  assert.equal(detail?.fact.artifactLocator?.question, '21');
+  assert.equal(detail?.evidence[0]?.artifactLocator?.page, 3);
+
+  await storage.clearMemories();
+  assert.equal(await storage.db.memoryArtifacts.count(), 0);
+});
+
+test('version 11 adds artifact storage without changing version 10 memory records', async (t) => {
+  const name = `omni-agent-v10-upgrade-${randomUUID()}`;
+  const legacy = new Dexie(name);
+  legacy.version(10).stores({
+    memoryFacts: '&id, &identityKey',
+    memoryEvidence: '&id, factId',
+  });
+  await legacy.open();
+  await legacy.table('memoryFacts').add({ id: 'legacy-fact', identityKey: 'legacy:key', value: '必须保留' });
+  await legacy.table('memoryEvidence').add({ id: 'legacy-evidence', factId: 'legacy-fact', excerpt: '旧证据' });
+  legacy.close();
+
+  const upgraded = new OmniAgentDatabase(name);
+  t.after(() => upgraded.delete());
+  await upgraded.open();
+
+  assert.equal(upgraded.verno, 11);
+  assert.equal((await upgraded.memoryFacts.get('legacy-fact'))?.value, '必须保留');
+  assert.equal((await upgraded.memoryEvidence.get('legacy-evidence'))?.excerpt, '旧证据');
+  assert.equal(await upgraded.memoryArtifacts.count(), 0);
+});
+
+test('moves artifact conversation provenance when temporary conversations are merged', async (t) => {
+  const storage = createStorage();
+  t.after(() => storage.db.delete());
+  const temporary = await storage.getOrCreateConversation({ providerId: 'deepseek', externalId: 'temp:page-1' });
+  const target = await storage.getOrCreateConversation({ providerId: 'deepseek', externalId: 'chat-1' });
+  const artifact = await storage.saveMemoryArtifact({
+    contentHash: 'merge-artifact-hash',
+    fileName: '来源.txt',
+    mimeType: 'text/plain',
+    size: 10,
+    providerId: 'deepseek',
+    conversationId: temporary.id,
+    projectId: null,
+    pageSessionId: 'page-1',
+  });
+
+  await storage.mergeConversations(temporary.id, target.id);
+  assert.equal((await storage.getMemoryArtifact(artifact.id))?.conversationId, target.id);
+  await storage.deleteConversation(target.id);
+  assert.equal((await storage.getMemoryArtifact(artifact.id))?.conversationId, null);
 });

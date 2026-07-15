@@ -15,6 +15,10 @@ export default defineContentScript({
       isChatRequest: (pathname) => isDeepSeekChatPath(pathname),
       extractPrompt: extractDeepSeekPrompt,
       applyPrompt: applyDeepSeekPrompt,
+      // File imports parse and persist complete semantic chunks before the
+      // provider request continues. A 20 MB document can legitimately exceed
+      // the old 10-second bridge timeout.
+      timeoutMs: 120_000,
     });
   },
 });

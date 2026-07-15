@@ -2,6 +2,7 @@ import { BrowserPageController } from '@omni-agent/browser-agent';
 import { createAdapterRegistry, kimiAdapter, providerFromAdapter } from '@omni-agent/site-adapters';
 import type { AdapterStatus, ExtensionMessage, ExtensionMessageMap } from '@omni-agent/shared';
 import { installMainWorldBridge } from '../src/content/main-world-bridge';
+import { installMemoryFileStaging } from '../src/content/file-staging';
 
 const adapters = createAdapterRegistry([kimiAdapter]);
 const pageController = new BrowserPageController();
@@ -15,9 +16,10 @@ export default defineContentScript({
   ],
   runAt: 'document_start',
   main(ctx) {
-    const disposeBridge = installMainWorldBridge('kimi');
-    const adapter = adapters.find(window.location.href);
     const pageSessionId = globalThis.crypto?.randomUUID?.() ?? `page-${Date.now().toString(36)}`;
+    const disposeBridge = installMainWorldBridge('kimi', pageSessionId);
+    const adapter = adapters.find(window.location.href);
+    const disposeFileStaging = installMemoryFileStaging('kimi', pageSessionId, () => adapter?.getConversationId() ?? null);
     const hideInternalProtocolMessages = () => adapter?.hideInternalProtocolMessages();
     hideInternalProtocolMessages();
     const internalMessageObserver = new MutationObserver(hideInternalProtocolMessages);
@@ -76,14 +78,14 @@ export default defineContentScript({
           type: 'omni:response-update',
           payload,
         }).catch((error) => {
-          if (/extension context invalidated|context invalidated/iu.test(error instanceof Error ? error.message : String(error))) {
+          if (/extension context invalidated|context invalidated|could not establish connection|receiving end does not exist/iu.test(error instanceof Error ? error.message : String(error))) {
             runtimeUnavailable = true;
           } else {
             console.warn('[OmniAgent] response observer unavailable', error);
           }
         });
       } catch (error) {
-        if (/extension context invalidated|context invalidated/iu.test(error instanceof Error ? error.message : String(error))) {
+        if (/extension context invalidated|context invalidated|could not establish connection|receiving end does not exist/iu.test(error instanceof Error ? error.message : String(error))) {
           runtimeUnavailable = true;
         } else {
           console.warn('[OmniAgent] response observer unavailable', error);
@@ -103,6 +105,7 @@ export default defineContentScript({
       stopMessages?.();
       stopResponses?.();
       internalMessageObserver.disconnect();
+      disposeFileStaging();
       disposeBridge();
     });
 

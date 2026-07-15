@@ -6,6 +6,7 @@ import {
   ToolExecutor,
   createToolRuntime,
   type BrowserSnapshot,
+  type MemorySaveBatchItem,
 } from '../src/index.js';
 
 test('registers builtins and describes them for prompt injection', () => {
@@ -14,6 +15,7 @@ test('registers builtins and describes them for prompt injection', () => {
       memory: {
         search: async () => [],
         save: async (input) => input,
+        saveBatch: async (items) => items,
       },
       browser: createBrowserService(),
     },
@@ -27,6 +29,7 @@ test('registers builtins and describes them for prompt injection', () => {
     'browser.snapshot',
     'browser.type',
     'memory.save',
+    'memory.save_batch',
     'memory.search',
   ]);
   assert.match(runtime.describeForPrompt(), /memory\.search/);
@@ -34,6 +37,7 @@ test('registers builtins and describes them for prompt injection', () => {
 
 test('executes memory tools through injected services', async () => {
   const saved: string[] = [];
+  let batched: MemorySaveBatchItem[] = [];
   const runtime = createToolRuntime({
     services: {
       memory: {
@@ -41,6 +45,15 @@ test('executes memory tools through injected services', async () => {
         save: async (input) => {
           saved.push(input.content);
           return { id: 'm1', content: input.content };
+        },
+        saveBatch: async (items) => {
+          batched = items;
+          return {
+            saved: items.length,
+            candidates: 0,
+            rejected: 0,
+            items: items.map((_, itemIndex) => ({ itemIndex, chunkIndex: 0, status: 'created', factId: `f${itemIndex}`, candidateId: null })),
+          };
         },
       },
     },
@@ -53,6 +66,114 @@ test('executes memory tools through injected services', async () => {
   const save = await runtime.execute({ name: 'memory.save', arguments: { content: '我喜欢简洁回复' } });
   assert.equal(save.ok, true);
   assert.deepEqual(saved, ['我喜欢简洁回复']);
+
+  const batch = await runtime.execute({
+    name: 'memory.save_batch',
+    arguments: {
+      items: [
+        {
+          content: '题目 1：答案 A',
+          type: 'knowledge',
+          sourceQuotes: ['  题目 1：答案 A  ', '题目 1：答案 A'],
+          sourceMessageIds: [' message-1 ', 'message-1'],
+        },
+        {
+          content: '题目 2：答案 B',
+          importance: 0.9,
+          sourceQuotes: ['题目 2：答案 B'],
+          sourceMessageIds: ['message-2'],
+        },
+      ],
+    },
+  });
+  assert.equal(batch.ok, true);
+  assert.equal((batch.result as { saved: number }).saved, 2);
+  assert.deepEqual(batched[0], {
+    content: '题目 1：答案 A',
+    type: 'knowledge',
+    importance: undefined,
+    sourceQuotes: ['题目 1：答案 A'],
+    sourceMessageIds: ['message-1'],
+  });
+});
+
+test('rejects malformed memory.save_batch items individually', async () => {
+  const runtime = createToolRuntime({
+    services: {
+      memory: {
+        search: async () => [],
+        save: async (input) => input,
+        saveBatch: async (items) => items,
+      },
+    },
+  });
+
+  const cases: Array<{ items: unknown[]; error: RegExp }> = [
+    {
+      items: [{ content: '没有依据' }],
+      error: /items\[0\]\.sourceQuotes must be a non-empty array/,
+    },
+    {
+      items: [{ content: '没有消息', sourceQuotes: ['原文'], sourceMessageIds: [] }],
+      error: /items\[0\]\.sourceMessageIds must be a non-empty array/,
+    },
+    {
+      items: [{ content: '类型错误', type: 'unknown', sourceQuotes: ['原文'], sourceMessageIds: ['m1'] }],
+      error: /items\[0\]\.type must be one of/,
+    },
+    {
+      items: [{ content: '权重错误', importance: 1.1, sourceQuotes: ['原文'], sourceMessageIds: ['m1'] }],
+      error: /items\[0\]\.importance must be a finite number between 0 and 1/,
+    },
+    {
+      items: [{ content: '引用错误', sourceQuotes: [''], sourceMessageIds: ['m1'] }],
+      error: /items\[0\]\.sourceQuotes must contain only non-empty strings/,
+    },
+  ];
+
+  for (const item of cases) {
+    const result = await runtime.execute({ name: 'memory.save_batch', arguments: { items: item.items } });
+    assert.equal(result.ok, true);
+    const batch = result.result as { rejected: number; items: Array<{ reason?: string }> };
+    assert.equal(batch.rejected, 1);
+    assert.match(batch.items[0]?.reason ?? '', item.error);
+  }
+});
+
+test('continues valid batch items when a sibling item has invalid metadata', async () => {
+  const received: string[] = [];
+  const runtime = createToolRuntime({
+    services: {
+      memory: {
+        search: async () => [],
+        save: async (input) => input,
+        saveBatch: async (items) => {
+          received.push(...items.map((item) => item.content));
+          return {
+            saved: items.length,
+            candidates: 0,
+            rejected: 0,
+            items: items.map((_, itemIndex) => ({ itemIndex, chunkIndex: 0, status: 'created', factId: `f${itemIndex}`, candidateId: null })),
+          };
+        },
+      },
+    },
+  });
+  const result = await runtime.execute({
+    name: 'memory.save_batch',
+    arguments: {
+      items: [
+        { content: '无来源', sourceQuotes: [], sourceMessageIds: ['m1'] },
+        { content: '合法事实', sourceQuotes: ['合法事实'], sourceMessageIds: ['m2'] },
+      ],
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(received, ['合法事实']);
+  const batch = result.result as { saved: number; rejected: number; items: Array<{ itemIndex: number; status: string }> };
+  assert.equal(batch.saved, 1);
+  assert.equal(batch.rejected, 1);
+  assert.deepEqual(batch.items.map((item) => [item.itemIndex, item.status]), [[0, 'rejected_schema'], [1, 'created']]);
 });
 
 test('checks permissions and validates required parameters', async () => {
@@ -62,6 +183,7 @@ test('checks permissions and validates required parameters', async () => {
     memory: {
       search: async () => [],
       save: async (input) => input,
+      saveBatch: async (items) => items,
     },
   });
   registry.register({

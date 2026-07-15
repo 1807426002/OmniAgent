@@ -3,6 +3,8 @@ export type {
   BrowserElementRef,
   BrowserSnapshot,
   BrowserToolService,
+  MemorySaveBatchItem,
+  MemorySaveType,
   ToolCall,
   ToolContext,
   ToolDefinition,
@@ -13,6 +15,7 @@ export type {
   ToolServices,
   ToolSource,
 } from './types.js';
+export { MEMORY_SAVE_TYPES } from './types.js';
 export { ToolRegistry } from './registry.js';
 export { ToolExecutor } from './executor.js';
 export { PermissionManager, DEFAULT_TOOL_PERMISSIONS } from './permissions.js';
@@ -24,6 +27,7 @@ export {
   browserSnapshotTool,
   browserTypeTool,
   memorySaveTool,
+  memorySaveBatchTool,
   memorySearchTool,
 } from './builtins.js';
 export { ToolRuntime, createToolRuntime, type ToolRuntimeOptions } from './runtime.js';

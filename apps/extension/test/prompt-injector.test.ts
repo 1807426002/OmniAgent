@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { findLikelyPromptInBinary, rewriteProtobufText } from '../src/main-world/prompt-injector.js';
+import { findLikelyPromptInBinary, hasOmniAgentProtocolContext, rewriteProtobufText } from '../src/main-world/prompt-injector.js';
+
+test('recognizes every internal OmniAgent prompt envelope', () => {
+  assert.equal(hasOmniAgentProtocolContext('<omniagent-tool-result>{}</omniagent-tool-result>'), true);
+  assert.equal(hasOmniAgentProtocolContext('<omniagent-action>{}</omniagent-action>'), true);
+  assert.equal(hasOmniAgentProtocolContext('<omniagent-memory-context>{}</omniagent-memory-context>'), true);
+  assert.equal(hasOmniAgentProtocolContext('<omniagent-memory-sources></omniagent-memory-sources>'), true);
+  assert.equal(hasOmniAgentProtocolContext('普通用户问题'), false);
+});
 
 test('rewrites a protobuf string inside a Connect unary request frame', () => {
   const source = new TextEncoder().encode('原问题');

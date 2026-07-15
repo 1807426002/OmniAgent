@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import type { AdapterStatus, ConversationTurn, ExtensionMessage, ExtensionMessageMap } from '@omni-agent/shared';
-import type { ConversationRecord, MemoryEvidenceRecord, MemoryCandidateRecord, MemoryFactRecord, MemoryRecord, MemoryRevisionRecord, MessageRecord, ProjectRecord, SessionChunkRecord } from '@omni-agent/storage';
+import type { ConversationRecord, MemoryArtifactRecord, MemoryEvidenceRecord, MemoryCandidateRecord, MemoryFactRecord, MemoryRecord, MemoryRevisionRecord, MessageRecord, ProjectRecord, SessionChunkRecord } from '@omni-agent/storage';
 import type { SkillDefinition, SkillInput } from '@omni-agent/skills';
 import type { ToolDescriptor, ToolResult } from '@omni-agent/tools';
 import type { AgentTask } from '@omni-agent/agent-core';
@@ -86,7 +86,7 @@ export const useExtensionStore = defineStore('extension', {
     memoryCandidates: [] as MemoryCandidateRecord[],
     selectedMemoryId: '',
     memoryCandidateEdit: '',
-    selectedMemoryDetail: null as { fact: MemoryFactRecord; evidence: MemoryEvidenceRecord[]; revisions: MemoryRevisionRecord[] } | null,
+    selectedMemoryDetail: null as { fact: MemoryFactRecord; evidence: MemoryEvidenceRecord[]; revisions: MemoryRevisionRecord[]; artifact: MemoryArtifactRecord | null } | null,
     sessionChunks: [] as SessionChunkRecord[],
     skills: [] as SkillDefinition[],
     skillTemplates: [] as SkillInput[],
@@ -337,7 +337,7 @@ export const useExtensionStore = defineStore('extension', {
       try {
         this.selectedMemoryDetail = await browser.runtime.sendMessage<
           ExtensionMessage<'omni:get-memory-detail'>,
-          { fact: MemoryFactRecord; evidence: MemoryEvidenceRecord[]; revisions: MemoryRevisionRecord[] } | undefined
+          { fact: MemoryFactRecord; evidence: MemoryEvidenceRecord[]; revisions: MemoryRevisionRecord[]; artifact: MemoryArtifactRecord | null } | undefined
         >({ type: 'omni:get-memory-detail', payload: { id } }) ?? null;
       } catch (error) {
         this.memoryError = error instanceof Error ? error.message : '读取记忆详情失败';

@@ -5,7 +5,16 @@ export const deepseekAdapter = new DomSiteAdapter({
   // Kept in sync with breezePeak/deepseek-pp's prompt-text-insertion adapter.
   hosts: ['chat.deepseek.com'],
   inputSelectors: ['textarea#chat-input', 'textarea'],
-  submitSelectors: ['button[type="submit"]', 'button[aria-label*="发送"]', 'button[aria-label*="Send"]'],
+  submitSelectors: [
+    'button[type="submit"]',
+    'button[aria-label*="发送"]',
+    'button[aria-label*="Send"]',
+    'button[class*="send"]',
+    'button[class*="submit"]',
+    '[role="button"][aria-label*="发送"]',
+    '[role="button"][aria-label*="Send"]',
+    '[role="button"][class*="send"]',
+  ],
   messageSelectors: ['.ds-message'],
   responseSelectors: ['._74c0879', '.ds-assistant-message-main-content'],
   getConversationId(url) {

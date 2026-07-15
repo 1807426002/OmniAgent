@@ -24,7 +24,7 @@ type PendingAugmentation = {
 export function installPromptInjector(options: PromptInjectorOptions): void {
   const timeoutMs = options.timeoutMs ?? 2_000;
   const alreadyAugmented = options.alreadyAugmented
-    ?? ((prompt: string) => prompt.includes('<omniagent-memory>') || prompt.includes('<omniagent-skill>'));
+    ?? hasOmniAgentProtocolContext;
 
   let contentPort: MessagePort | null = null;
   const pending = new Map<string, PendingAugmentation>();
@@ -253,6 +253,7 @@ export function installPromptInjector(options: PromptInjectorOptions): void {
     return new Promise((resolve) => {
       const timeout = setTimeout(() => {
         pending.delete(id);
+        reportDiagnostic('augmentation-timeout', `${options.provider} 提示增强等待超过 ${timeoutMs}ms，已发送原始问题`);
         resolve(prompt);
       }, timeoutMs);
       pending.set(id, { resolve, timeout });
@@ -269,6 +270,10 @@ export function installPromptInjector(options: PromptInjectorOptions): void {
   function reportDiagnostic(stage: string, detail: string): void {
     contentPort?.postMessage({ source: MAIN_WORLD_SOURCE, type: 'OMNIAGENT_DIAGNOSTIC', stage, detail });
   }
+}
+
+export function hasOmniAgentProtocolContext(prompt: string): boolean {
+  return /<omniagent-(?:action|tool-result|tools|memory(?:-context|-sources)?|skill(?:-context)?)\b/iu.test(prompt);
 }
 
 function requestUrl(input: RequestInfo | URL): string {
