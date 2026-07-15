@@ -29,8 +29,9 @@ import {
 import { McpProvider } from '@omni-agent/mcp';
 import { AgentRuntime, type AgentTask } from '@omni-agent/agent-core';
 import { buildContinuationPrompt, isInternalProtocolMessage, parseAgentDecision, serializeToolResult } from '@omni-agent/agent-protocol';
+import { captureAdapterCommand, isAdapterPageCommand, unwrapAdapterCommandResult } from '../src/adapter-command';
 import { isDurableMemoryContent, normalizeEvidenceText, validateChatMemoryEvidence, type ChatMemorySource } from '../src/memory-write-quality';
-import { formatMemorySaveStatus } from '../src/tool-status';
+import { formatMemorySaveStatus, formatToolContinuationFailure } from '../src/tool-status';
 import { extractExplicitMemoryContent, inferExplicitMemoryType } from '../src/explicit-memory';
 import {
   isBulkMemoryCommand,
@@ -745,18 +746,22 @@ export default defineBackground(() => {
 
     const tab = await getActiveTab();
     if (!tab?.id) throw new Error('无法获取当前浏览器标签页');
+    const tabId = tab.id;
 
     const adapter = adapters.find(tab.url ?? '');
     if (message.type === 'omni:adapter-status') {
-      if (!adapter) return statusFor(tab.url, adapter);
-      try {
-        const status = await browser.tabs.sendMessage(tab.id, message) as AdapterStatus | undefined;
-        if (status?.provider) return status;
-      } catch {
-        // Fall through to an actionable error instead of reporting a URL-only
-        // match as a connected page.
-      }
-      throw new Error(`${providerFromAdapter(adapter) === 'kimi' ? 'Kimi' : 'DeepSeek'} 页面适配器未就绪，请刷新当前网页后重试`);
+      return captureAdapterCommand(async () => {
+        if (!adapter) return statusFor(tab.url, adapter);
+        try {
+          const response = await browser.tabs.sendMessage(tabId, { ...message, target: 'page' });
+          const status = unwrapAdapterCommandResult<AdapterStatus>(response);
+          if (status?.provider) return status;
+        } catch {
+          // Fall through to an actionable error instead of reporting a URL-only
+          // match as a connected page.
+        }
+        throw new Error(`${providerFromAdapter(adapter) === 'kimi' ? 'Kimi' : 'DeepSeek'} 页面适配器未就绪，请刷新当前网页后重试`);
+      });
     }
     if (
       message.type === 'omni:browser-snapshot' ||
@@ -776,8 +781,10 @@ export default defineBackground(() => {
       message.type === 'omni:insert-prompt' ||
       message.type === 'omni:send-message'
     ) {
-      if (!adapter) throw new Error('请在 DeepSeek 或 Kimi 网页中使用此功能');
-      return browser.tabs.sendMessage(tab.id, message);
+      return captureAdapterCommand(async () => {
+        if (!adapter) throw new Error('请在 DeepSeek 或 Kimi 网页中使用此功能');
+        return sendToActiveTab(message);
+      });
     }
     return undefined;
   });
@@ -866,11 +873,17 @@ async function sendToActiveTab(message: ExtensionMessage): Promise<unknown> {
   const tab = await getActiveTab();
   if (!tab?.id) throw new Error('无法获取当前浏览器标签页');
   if (isRestrictedUrl(tab.url)) throw new Error('当前页面不支持浏览器操作');
+  let response: unknown;
   try {
-    return await browser.tabs.sendMessage(tab.id, message);
-  } catch {
+    response = await browser.tabs.sendMessage(tab.id, { ...message, target: 'page' });
+  } catch (error) {
+    if (isAdapterPageCommand(message)) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`页面适配器通信失败：${detail || '内容脚本没有响应'}。请刷新当前网页后重试`);
+    }
     throw new Error('当前页面尚未注入 Browser Agent，请刷新页面后重试');
   }
+  return isAdapterPageCommand(message) ? unwrapAdapterCommandResult(response) : response;
 }
 
 function isRestrictedUrl(url: string | undefined): boolean {
@@ -1874,13 +1887,29 @@ async function handleModelToolCall(message: ExtensionMessage<'omni:response-upda
       },
     });
   } catch (error) {
-    if (!renderedLocally) throw error;
+    const detail = error instanceof Error ? error.message : String(error);
+    let fallbackRendered = renderedLocally;
+    let fallbackError = '';
+    if (!fallbackRendered) {
+      try {
+        fallbackRendered = Boolean(await sendToActiveTab({
+          type: 'omni:render-tool-status',
+          payload: {
+            messageId: payload.messageId,
+            text: formatToolContinuationFailure(parsed.decision.toolName, result, detail),
+          },
+        }));
+      } catch (renderError) {
+        fallbackError = renderError instanceof Error ? renderError.message : String(renderError);
+      }
+    }
     await storage.setSetting(memoryDiagnosticKey, {
       stage: 'tool-continuation-error',
-      detail: error instanceof Error ? error.message : String(error),
+      detail: fallbackError ? `${detail}；页面错误提示也未能显示：${fallbackError}` : detail,
       count: 0,
       at: Date.now(),
     });
+    if (!fallbackRendered) throw error;
   }
 }
 

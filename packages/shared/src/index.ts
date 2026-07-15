@@ -181,4 +181,5 @@ export interface ExtensionMessageMap {
 export type ExtensionMessage<T extends keyof ExtensionMessageMap = keyof ExtensionMessageMap> = {
   type: T;
   payload?: ExtensionMessageMap[T];
+  target?: 'page';
 };

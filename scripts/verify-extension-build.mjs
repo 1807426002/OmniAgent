@@ -25,6 +25,17 @@ assert(manifest.side_panel?.default_path === 'sidepanel.html', 'Side panel entry
 
 const contentScripts = manifest.content_scripts ?? [];
 assert(contentScripts.some((entry) => entry.matches?.includes('*://chat.deepseek.com/*')), 'DeepSeek content script is missing');
+const browserAgent = contentScripts.find((entry) => entry.matches?.includes('*://*/*'));
+assert(browserAgent, 'Browser Agent content script is missing');
+for (const excludedMatch of [
+  '*://chat.deepseek.com/*',
+  '*://kimi.com/*',
+  '*://www.kimi.com/*',
+  '*://kimi.moonshot.cn/*',
+  '*://www.kimi.moonshot.cn/*',
+]) {
+  assert(browserAgent.exclude_matches?.includes(excludedMatch), `Browser Agent must not race the provider content script: ${excludedMatch}`);
+}
 for (const match of [
   '*://kimi.com/*',
   '*://www.kimi.com/*',

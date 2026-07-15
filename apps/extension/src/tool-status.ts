@@ -28,6 +28,23 @@ export function formatMemorySaveStatus(execution: ToolExecutionResult): string {
   return parts.length ? `记忆处理完成：${parts.join('，')}。` : '没有提取到可保存的长期信息。';
 }
 
+/** Keeps a hidden tool turn visible when the provider cannot accept its continuation prompt. */
+export function formatToolContinuationFailure(
+  toolName: string,
+  execution: ToolExecutionResult,
+  cause: string,
+): string {
+  const isMemory = toolName.startsWith('memory.');
+  const label = isMemory ? '记忆处理' : `工具 ${toolName}`;
+  if (!execution.ok) return isMemory
+    ? `${label}失败：${execution.error || '未知错误'}`
+    : `${label} 执行失败：${execution.error || '未知错误'}`;
+  const detail = cause.replace(/\s+/gu, ' ').trim().slice(0, 240) || '页面没有接受后续消息';
+  return isMemory
+    ? `${label}已完成，但 AI 未能继续回复：${detail}`
+    : `${label} 已执行，但 AI 未能继续回复：${detail}`;
+}
+
 function count(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
