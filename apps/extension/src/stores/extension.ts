@@ -161,6 +161,7 @@ export const useExtensionStore = defineStore('extension', {
         const payload = message.payload as ExtensionMessageMap['omni:response-update'] | undefined;
         if (payload?.role === 'user') this.latestQuestion = payload.text;
         if (payload?.role === 'assistant') this.latestResponse = payload.text;
+        void this.refreshAdapter();
         void this.refreshMemoryDiagnostic();
         void this.refreshSavedConversations();
         return undefined;

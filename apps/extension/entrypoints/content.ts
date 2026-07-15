@@ -23,6 +23,7 @@ export default defineContentScript({
       provider: providerFromAdapter(adapter),
       url: window.location.href,
       conversationId: adapter?.getConversationId() ?? null,
+      health: adapter?.inspectHealth(),
     });
 
     const handleMessage = async (message: ExtensionMessage) => {
@@ -48,6 +49,10 @@ export default defineContentScript({
       if (message.type === 'omni:insert-prompt' && adapter) {
         const payload = message.payload as ExtensionMessageMap['omni:insert-prompt'] | undefined;
         if (payload?.message) return adapter.insertPrompt(payload.message).then(() => status());
+      }
+      if (message.type === 'omni:render-tool-status' && adapter) {
+        const payload = message.payload as ExtensionMessageMap['omni:render-tool-status'] | undefined;
+        if (payload?.text) return adapter.renderToolStatus(payload.messageId, payload.text);
       }
       if (message.type === 'omni:send-message' && adapter) {
         const payload = message.payload as ExtensionMessageMap['omni:send-message'] | undefined;

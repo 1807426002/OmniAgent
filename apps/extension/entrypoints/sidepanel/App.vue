@@ -180,7 +180,13 @@ onUnmounted(() => {
       <section class="active-ai-card" :class="{ connected: extension.adapter.provider }" aria-label="当前激活 AI">
         <span class="quick-card-label">当前激活 AI</span>
         <strong>{{ provider }}</strong>
-        <span>{{ extension.adapter.provider ? '已随当前浏览器页签自动切换' : '切换到已支持的网站后自动激活' }}</span>
+        <span class="active-ai-note">{{ extension.adapter.provider ? '已随当前浏览器页签自动切换' : '切换到已支持的网站后自动激活' }}</span>
+        <div v-if="extension.adapter.health" class="adapter-health" aria-label="页面适配状态">
+          <span class="adapter-health-item" :data-state="extension.adapter.health.inputFound ? 'ready' : 'error'">输入框</span>
+          <span class="adapter-health-item" :data-state="extension.adapter.health.submitFound ? 'ready' : 'error'">发送按钮</span>
+          <span class="adapter-health-item" :data-state="extension.adapter.health.messageCount ? 'ready' : 'idle'">消息 {{ extension.adapter.health.messageCount }}</span>
+          <span class="adapter-health-item" :data-state="extension.adapter.health.responseCount ? 'ready' : 'idle'">回复 {{ extension.adapter.health.responseCount }}</span>
+        </div>
       </section>
       <section class="provider-section" aria-label="已支持的平台">
         <span class="quick-card-label">已支持的平台</span>
